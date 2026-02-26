@@ -1,0 +1,31 @@
+# Diretórios do projeto
+references/
+data/
+models/
+notebooks/.ipynb_checkpoints/
+
+# Python / Ambientes Virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env/
+env/
+.venv/
+.virtualenv/
+
+# Jupyter / Ferramentas de Dados
+.ipynb_checkpoints/
+.jupyter_cache/
+.pytest_cache/
+
+# Arquivos locais e de configuração (IDE)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos do Sistema Operacional
+.DS_Store
+Thumbs.db
+desktop.ini
