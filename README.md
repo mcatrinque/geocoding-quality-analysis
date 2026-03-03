@@ -1,6 +1,6 @@
 <div align="center">
-  <h1>Análise de Qualidade de Dados Geoespaciais e Incerteza em Geocodificação</h1>
-  <h3>Estudo Empírico do CNEFE 2022 frente ao Gold Standard (BHMap Endereços)</h3>
+  <h1>Análise de Qualidade e Incerteza de Dados Geoespaciais</h1>
+  <h3>Estudo Empírico do CNEFE 2022 frente ao BHMap Endereços</h3>
   <p><i>Repositório Oficial da Dissertação de Mestrado (Ciência da Computação - UFMG)</i></p>
 </div>
 
@@ -10,7 +10,7 @@
 
 Este projeto avalia empiricamente a qualidade e a incerteza de dados de geocodificação no **Cadastro Nacional de Endereços para Fins Estatísticos (CNEFE 2022)** do IBGE, utilizando a base municipal **BHMap Endereços** (Belo Horizonte - MG) como *Gold Standard*. 
 
-A dissertação segue um desenho metodológico inspirado no estudo clássico de Davis (2011). O foco central **não** é propor um framework de software inédito, mas sim conduzir uma **avaliação empírica, metodológica e rigorosamente reprodutível** sobre a acurácia posicional, a consistência e a incompletude do cadastro federal, modelando a incerteza espacial por meio das métricas PCI, MCI, LCI e GCI (Davis & Fonseca, 2007).
+A dissertação segue um desenho metodológico inspirado no estudo clássico de Davis (2011). O foco central é conduzir uma **avaliação empírica, metodológica e rigorosamente reprodutível** sobre a acurácia posicional, a consistência e a incompletude do cadastro federal, modelando a incerteza espacial por meio das métricas PCI, MCI, LCI e GCI (Davis & Fonseca, 2007).
 
 ### Objetivos Principais
 1. **Medir a Completude e Consistência:** Quantificar lacunas, duplicações e coerência dos dados do CNEFE 2022 em relação ao BHMap.
@@ -32,26 +32,26 @@ O escopo do texto acadêmico e a geração das evidências via código convergem
 
 ---
 
-## Estrutura do Repositório (Spatial Data Science)
+## Estrutura do Repositório 
 
-O projeto segue um formato modular otimizado para a reprodutibilidade, aderente à política de "Código Limpo" e isolamento de scripts de visualização vs engenharia.
+O projeto segue um formato modular otimizado para a reprodutibilidade:
 
-*   **`data/`**: Diretório principal de persistência (P ignorado pelo Git devido ao volume).
-    *   `raw/`: Dados massivos (ex: CNEFE `qg_*.json` de 5.5GB e `.shp` do BHMap).
+*   **`data/`**: Diretório principal de persistência:
+    *   `raw/`: Dados massivos (ex: CNEFE e BHMap).
     *   `processed/`: Arquivos canônicos hiperformáticos serializados em `.parquet`.
-*   **`notebooks/`**: A camada de apresentação (Notebooks Jupyter catalogados de 01 a 05) que rodam o fluxo lógico, desde o ETL até os cálculos geoespaciais e relatórios visuais.
-*   **`src/`**: Pilar de engenharia em Python nativo e tipado, consumido pelos Notebooks:
-    *   `etl_pipeline.py`: Integração *Out-of-Core* em C++ via DuckDB (extrato de gigabytes convertidos em memória).
-    *   `matching.py`: Motor de *Record Linkage* (Espacial + Distância de Edição Levenshtein).
+*   **`notebooks/`**: A camada de apresentação que rodam o fluxo lógico, desde o ETL até os cálculos geoespaciais e relatórios visuais.
+*   **`src/`**: Pilar de engenharia do projeto, consumido pelos Notebooks:
+    *   `etl_pipeline.py`: Integração *Out-of-Core* em C++ via DuckDB.
+    *   `matching.py`: Motor de Distância Espacial e Distância de Edição (Levenshtein).
     *   `metrics.py`: Ferramentais puros de modelagem linear e estatística (RMSE, Completude, MCI).
-    *   `maps.py`: Wrapper para rederizações cartográficas (Contextily, Matplotlib, KDE).
-*   **`outputs/`**: Entregáveis puros para a dissertação impressa (PDFs acadêmicos, tabelas CSV com amostras da auditoria, e matrizes visuais).
+    *   `maps.py`: Wrapper para rederizações cartográficas.
+*   **`outputs/`**: Entregáveis contendo os resultados e análise do projeto.
 
 ---
 
-## Como Executar o Projeto (Reprodutibilidade)
+## Como Executar o Projeto
 
-Todo o orquestramento do pipeline geográfico é encapsulado via **Invoke** (Task Runner). 
+Todo o orquestramento do pipeline geográfico é encapsulado via **Invoke**. 
 
 ### 1. Bootstrapping
 Crie o ambiente virtual nativo e instale as dependências.
@@ -69,16 +69,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 invoke setup
 ```
-*O comando `invoke setup` audita sua máquina paralisando o processo de forma elegante caso você não tenha baixado os dados de 5.5GB do IBGE na pasta `RAW` correta.*
+*O comando `invoke setup` audita a máquina.*
 
 ### 2. O Pipeline Invoke
-Dentro do ambiente, você pode acionar os estágios vitais da pesquisa via terminal:
+Dentro do ambiente, é possível acionar os estágios vitais da pesquisa via terminal:
 
-*   **`invoke clean`**: Zera implacavelmente o projeto. Apaga qualquer resíduo temporal e outputs gráficos gerados no passado.
-*   **`invoke etl`**: *Extract, Transform and Load*. Sobe o DuckDB; devora o JSON gigante e os shapefiles brutos; normaliza os logradouros nativamente, e escreve `.parquets` microscópicos e velozes para apenas o município de Belo Horizonte.
+*   **`invoke clean`**:  Apaga qualquer resíduo temporal e outputs gráficos gerados no projeto.
+*   **`invoke etl`**: *Extract, Transform and Load*. Inicializa o DuckDB; processa o JSON e os shapefiles brutos; normaliza os logradouros nativamente, e escreve `.parquets` contendo registros de endereço do município de Belo Horizonte.
 *   **`invoke match`**: Inicia o Motor Híbrido, ligando pontualmente Endereço a Endereço baseando-se por aproximação esférica (GeoPandas) combinada de análise descritiva de strings (RapidFuzz).
-*   **`invoke analyze`**: Calcula o RMSE, modela o MCI e exporta os painéis fotográficos para o capítulo de resultados de forma expressa (sem reler as matrizes custosas de strings novamente).
-*   **`invoke all`**: O pipeline atômico *End-To-End* sequencial. Execute para reproduzir todos os dados da dissertação de forma limpa.
+*   **`invoke analyze`**: Calcula o RMSE, modela o MCI e exporta imagens para o capítulo de resultados.
+*   **`invoke all`**: Executa o pipeline completo para reproduzir todos os dados da dissertação.
 
 ---
 
