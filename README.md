@@ -6,7 +6,7 @@
 
 ---
 
-## 📖 Visão Geral do Projeto
+## Visão Geral do Projeto
 
 Este projeto avalia empiricamente a qualidade e a incerteza de dados de geocodificação no **Cadastro Nacional de Endereços para Fins Estatísticos (CNEFE 2022)** do IBGE, utilizando a base municipal **BHMap Endereços** (Belo Horizonte - MG) como *Gold Standard*. 
 
@@ -20,7 +20,7 @@ A dissertação segue um desenho metodológico inspirado no estudo clássico de 
 
 ---
 
-## 🧠 Arquitetura da Dissertação
+## Arquitetura da Dissertação
 
 O escopo do texto acadêmico e a geração das evidências via código convergem para os seguintes pilares teóricos:
 
@@ -32,7 +32,7 @@ O escopo do texto acadêmico e a geração das evidências via código convergem
 
 ---
 
-## 🛠️ Estrutura do Repositório (Spatial Data Science)
+## Estrutura do Repositório (Spatial Data Science)
 
 O projeto segue um formato modular otimizado para a reprodutibilidade, aderente à política de "Código Limpo" e isolamento de scripts de visualização vs engenharia.
 
@@ -49,7 +49,7 @@ O projeto segue um formato modular otimizado para a reprodutibilidade, aderente 
 
 ---
 
-## ⚙️ Como Executar o Projeto (Reprodutibilidade)
+## Como Executar o Projeto (Reprodutibilidade)
 
 Todo o orquestramento do pipeline geográfico é encapsulado via **Invoke** (Task Runner). 
 
@@ -82,7 +82,7 @@ Dentro do ambiente, você pode acionar os estágios vitais da pesquisa via termi
 
 ---
 
-## 📚 Referências Fundamentais
+## Referências Fundamentais
 
 Esta pesquisa é ancorada na literatura científica clássica e contemporânea voltada para Qualidade de Geoinformação (GI) e métodos quantitativos iterativos em Computação.
 
