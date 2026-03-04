@@ -1,1 +1,28 @@
-"import structlog\nimport logging\nimport sys\n\ndef setup_logging():\n    \"\"\"Sets up structlog for the project with a clean console renderer.\"\"\"\n    logging.basicConfig(\n        format=\"%(message)s\",\n        stream=sys.stdout,\n        level=logging.INFO,\n    )\n\n    structlog.configure(\n        processors=[\n            structlog.stdlib.add_log_level,\n            structlog.stdlib.add_logger_name,\n            structlog.processors.TimeStamper(fmt=\"iso\"),\n            structlog.dev.ConsoleRenderer(colors=True),\n        ],\n        context_class=dict,\n        logger_factory=structlog.stdlib.LoggerFactory(),\n        wrapper_class=structlog.stdlib.BoundLogger,\n        cache_logger_on_first_use=True,\n    )\n    \n    return structlog.get_logger()\n\nlogger = setup_logging()\n"
+import structlog
+import logging
+import sys
+
+def setup_logging():
+    """Sets up structlog for the project with a clean console renderer."""
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=logging.INFO,
+    )
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(colors=True),
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+    
+    return structlog.get_logger()
+
+logger = setup_logging()

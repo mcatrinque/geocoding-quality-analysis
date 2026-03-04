@@ -8,7 +8,7 @@ def setup(c):
     Instala dependências de Python e verifica a integridade dos arquivos brutos (CNEFE e BHMap).
     """
     print("[SETUP] 1/2: Instalando/Atualizando bibliotecas do requirements.txt...")
-    c.run("pip install -r requirements.txt", hide=False)
+    # c.run("pip install -r requirements.txt", hide=False)
     
     print("\\n[SETUP] 2/2: Verificando integridade dos requisitos dos dados brutos...")
     
