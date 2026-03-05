@@ -2,7 +2,13 @@
 references/
 data/
 models/
+
+# Cache de dados geoespaciais (osmnx/geobr)
+notebooks/cache/
 notebooks/.ipynb_checkpoints/
+
+# Outputs gerados (reprodutíveis via `inv all`)
+outputs/
 
 # Python / Ambientes Virtuais
 __pycache__/

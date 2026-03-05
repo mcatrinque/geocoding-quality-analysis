@@ -1,70 +1,87 @@
-import pandas as pd
-import numpy as np
-from typing import Dict, Any
+"""
+Módulo de métricas de qualidade e completude.
 
-def calculate_completeness(df: pd.DataFrame, columns: list) -> pd.DataFrame:
+Fornece funções para calcular completude de atributos, RMSE posicional
+e resumos de qualidade da integração CNEFE/BHMap.
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Any, Dict, List
+
+
+def calculate_completeness(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """
-    Calculates the percentage of non-null and non-empty values for a given list of columns.
-    
+    Calcula a porcentagem de valores preenchidos (não nulos e não vazios) por atributo.
+
     Args:
-        df (pd.DataFrame): The dataframe to analyze.
-        columns (list): List of column names to check completeness for.
-    
+        df: DataFrame a ser analisado.
+        columns: Lista de nomes de colunas para verificar.
+
     Returns:
-        pd.DataFrame: A dataframe with completeness statistics.
+        DataFrame com colunas 'Attribute', 'Valid Count', 'Missing Count' e 'Completeness (%)'.
     """
     stats = []
     total_rows = len(df)
-    
+
     if total_rows == 0:
         return pd.DataFrame()
-        
+
     for col in columns:
         if col not in df.columns:
             continue
-            
-        # Consider None, NaN, empty strings, and strings with only spaces as missing
+
+        # Considera None, NaN, strings vazias e strings só com espaços como missing
         is_missing = df[col].isna() | (df[col].astype(str).str.strip() == '')
-        
+
         valid_count = (~is_missing).sum()
         completeness_pct = (valid_count / total_rows) * 100
-        
+
         stats.append({
             'Attribute': col,
             'Valid Count': valid_count,
             'Missing Count': is_missing.sum(),
             'Completeness (%)': round(completeness_pct, 2)
         })
-        
+
     return pd.DataFrame(stats)
+
 
 def calculate_positional_rmse(df: pd.DataFrame, error_col: str = 'spatial_distance') -> float:
     """
-    Calculates the Root Mean Square Error (RMSE) of the spatial distance (positional error).
-    
+    Calcula o Root Mean Square Error (RMSE) da distância posicional em metros.
+
     Args:
-        df (pd.DataFrame): The dataframe containing the matches.
-        error_col (str): The column representing the distance error in meters.
-        
+        df: DataFrame contendo a coluna de erro.
+        error_col: Nome da coluna com a distância de erro em metros.
+
     Returns:
-        float: The RMSE value in meters.
+        RMSE em metros, ou ``np.nan`` se não houver dados válidos.
     """
     if error_col not in df.columns or len(df) == 0:
         return np.nan
-        
+
     valid_errors = df[error_col].dropna()
     if len(valid_errors) == 0:
         return np.nan
-        
+
     rmse = np.sqrt(np.mean(valid_errors ** 2))
     return round(rmse, 2)
 
+
 def generate_quality_summary(df: pd.DataFrame, mci_threshold: float = 0.8) -> Dict[str, Any]:
     """
-    Generates a concise quality summary focusing on matches at or above a given MCI threshold.
+    Gera um resumo conciso de qualidade focado nos matches de alta certeza.
+
+    Args:
+        df: DataFrame com colunas 'MCI' e 'spatial_distance'.
+        mci_threshold: Limiar mínimo de MCI para considerar alta certeza.
+
+    Returns:
+        Dicionário com métricas agregadas de qualidade.
     """
     high_certainty = df[df['MCI'] >= mci_threshold]
-    
+
     return {
         'total_records': len(df),
         'high_certainty_matches': len(high_certainty),
