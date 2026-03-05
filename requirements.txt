@@ -25,3 +25,4 @@ statsmodels
 mgwr
 scipy>=1.12,<1.15
 scikit-learn
+kaleido==0.2.1
