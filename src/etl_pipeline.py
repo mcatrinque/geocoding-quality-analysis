@@ -75,7 +75,9 @@ def run_etl() -> None:
     cnefe_query = f"""
         COPY (
             SELECT 
-                LOGRAD_NUM, COMPLEMENTO, DSC_LOCALIDADE, CEP, ST_AsText(geom) AS wkt_geometry
+                LOGRAD_NUM, COMPLEMENTO, DSC_LOCALIDADE, CEP, 
+                COD_ESPECIE, COD_TIPO_ESPECI, DSC_ESTABELECIMENTO,
+                ST_AsText(geom) AS wkt_geometry
             FROM st_read('{config.CNEFE_RAW_FILE}')
             WHERE COD_MUNICIPIO = '3106200'
         ) TO '{temp_cnefe}' (FORMAT PARQUET);
@@ -112,7 +114,13 @@ def run_etl() -> None:
     df_bhmap['std_municipio'] = 'BELO HORIZONTE'
     df_bhmap['std_uf'] = 'MG'
 
+    # 5/5 - Exporting Canonicals to PROCESSED directory
     logger.info("5/5 - Exporting Canonicals to PROCESSED directory")
+    
+    # Garantir IDs únicos
+    df_cnefe['id_cnefe'] = df_cnefe.index
+    df_bhmap['id_bhmap'] = df_bhmap.index
+    
     df_cnefe.to_parquet(config.CNEFE_PROCESSED_FILE)
     df_bhmap.to_parquet(config.BHMAP_PROCESSED_FILE)
 

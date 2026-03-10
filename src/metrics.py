@@ -89,3 +89,116 @@ def generate_quality_summary(df: pd.DataFrame, mci_threshold: float = 0.8) -> Di
         'average_positional_error_m': round(high_certainty['spatial_distance'].mean(), 2) if 'spatial_distance' in high_certainty else np.nan,
         'positional_rmse_m': calculate_positional_rmse(high_certainty)
     }
+
+
+def categorize_cnefe_species(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Classifica cada registro do CNEFE em categorias analíticas baseadas em espécie e tipo.
+
+    Mapeamento:
+    - Residencial Horizontal: Espécie 1 (Particular) + Tipo 101/102 (Casa/Vila)
+    - Residencial Vertical: Espécie 1 (Particular) + Tipo 103 (Apartamento)
+    - Comercial e Serviços: Espécie 8 (Outras finalidades)
+    - Serviço Público e Social: Espécie 4, 5 ou 6 (Ensino, Saúde, Religioso)
+    - Outros: Outros códigos de espécie ou tipo.
+
+    Args:
+        df: DataFrame contendo COD_ESPECIE e COD_TIPO_ESPECI.
+
+    Returns:
+        DataFrame com a coluna 'categoria_analitica' adicionada.
+    """
+    def _get_cat(row):
+        try:
+            esp = int(float(row.get('COD_ESPECIE'))) if row.get('COD_ESPECIE') not in [None, '', 'nan'] else None
+        except (ValueError, TypeError):
+            esp = None
+            
+        try:
+            tipo = int(float(row.get('COD_TIPO_ESPECI'))) if row.get('COD_TIPO_ESPECI') not in [None, '', 'nan'] else None
+        except (ValueError, TypeError):
+            tipo = None
+        
+        # Particular (Residencial)
+        if esp == 1:
+            if tipo in [101, 102]:
+                return 'Residencial Horizontal'
+            elif tipo == 103:
+                return 'Residencial Vertical'
+            return 'Residencial Outros'
+        
+        # Comercial/Serviços
+        if esp == 8:
+            return 'Comercial e Servicos'
+        
+        # Público/Social
+        if esp in [4, 5, 6]:
+            return 'Servico Publico/Social'
+        
+        # Unidade em Construção
+        if esp == 7:
+            return 'Unidade em Construcao'
+        
+        # Domicílio Coletivo
+        if esp == 2:
+            return 'Domicilio Coletivo'
+            
+        return 'Outros'
+
+    df = df.copy()
+    df['categoria_analitica'] = df.apply(_get_cat, axis=1)
+    return df
+
+
+def infer_bhmap_typology(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Infere a tipologia (Horizontal/Vertical) no BHMap baseada na densidade de endereços.
+    
+    Lógica: Coordenadas com mais de um endereço são classificadas como 'Vertical',
+    indicando edifícios de apartamentos ou salas comerciais.
+    
+    Args:
+        df: DataFrame do BHMap (contendo geometry).
+        
+    Returns:
+        DataFrame com a coluna 'tipologia_bhmap' adicionada.
+    """
+    df = df.copy()
+    # Identifica duplicatas espaciais (tenta geometry ou wkt_geometry)
+    geo_col = 'geometry' if 'geometry' in df.columns else 'wkt_geometry'
+    
+    if geo_col not in df.columns:
+        # Fallback para não quebrar se não houver coluna espacial
+        df['tipologia_bhmap'] = 'Horizontal'
+        df['address_count'] = 1
+        return df
+
+    counts = df.groupby(geo_col).size().reset_index(name='address_count')
+    counts['tipologia_bhmap'] = counts['address_count'].apply(
+        lambda x: 'Vertical' if x > 1 else 'Horizontal'
+    )
+    
+    return df.merge(counts[[geo_col, 'tipologia_bhmap', 'address_count']], on=geo_col, how='left')
+
+
+def calculate_match_rate_by_category(df_cnefe: pd.DataFrame, matched_ids: List[Any]) -> pd.DataFrame:
+    """
+    Calcula a taxa de pareamento (Matching Rate) para cada categoria do CNEFE.
+    
+    Args:
+        df_cnefe: DataFrame original do CNEFE com categoria_analitica.
+        matched_ids: Lista de identificadores únicos do CNEFE que foram pareados.
+        
+    Returns:
+        DataFrame com colunas Category, Total, Matched, and Match Rate (%).
+    """
+    df_cnefe = df_cnefe.copy()
+    df_cnefe['is_matched'] = df_cnefe['id_cnefe'].isin(matched_ids)
+    
+    summary = df_cnefe.groupby('categoria_analitica').agg(
+        Total=('id_cnefe', 'count'),
+        Matched=('is_matched', 'sum')
+    ).reset_index()
+    
+    summary['Match Rate (%)'] = (summary['Matched'] / summary['Total'] * 100).round(2)
+    return summary.rename(columns={'categoria_analitica': 'Category'})
