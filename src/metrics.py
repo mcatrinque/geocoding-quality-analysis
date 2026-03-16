@@ -202,3 +202,52 @@ def calculate_match_rate_by_category(df_cnefe: pd.DataFrame, matched_ids: List[A
     
     summary['Match Rate (%)'] = (summary['Matched'] / summary['Total'] * 100).round(2)
     return summary.rename(columns={'categoria_analitica': 'Category'})
+
+
+def calculate_ce90(df: pd.DataFrame, error_col: str = 'spatial_distance') -> float:
+    """
+    Calcula o Circular Error 90% (CE90) da distância posicional em metros.
+    Representa o raio que engloba 90% dos erros posicionais medidos.
+    """
+    if error_col not in df.columns or len(df) == 0:
+        return np.nan
+
+    valid_errors = df[error_col].dropna()
+    if len(valid_errors) == 0:
+        return np.nan
+
+    ce90 = float(np.percentile(valid_errors.abs(), 90))
+    return round(ce90, 2)
+
+
+def categorize_formal_informal_toponymy(df: pd.DataFrame, street_col: str = 'std_tipo_logradouro') -> pd.DataFrame:
+    """
+    Classifica o tipo de logradouro em Formal ou Informal.
+    Formal: RUA, AVENIDA, PRACA, RODOVIA, etc.
+    Informal: BECO, VILA, ESCADARIA, TRAVESSA, VIELA, ALPE, etc.
+    """
+    df = df.copy()
+    if street_col not in df.columns:
+        df['toponimia_formalidade'] = 'Desconhecido'
+        return df
+
+    informal_types = ['BEC', 'VIL', 'ESC', 'TRA', 'VIE', 'PAS', 'AL', 'CAM']
+    formality_map = lambda x: 'Informal' if str(x).strip().upper() in informal_types else 'Formal'
+    
+    df['toponimia_formalidade'] = df[street_col].apply(formality_map)
+    return df
+
+
+def calculate_pci(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcula o Positional Certainty Index (PCI) empírico, baseado na tipologia inferida.
+    De acordo com Davis Jr., incerteza posicional baseada na consolidação de geometrias.
+    - Horizontal (Isolado/Próximo Lote único): PCI = 1.0
+    - Vertical (Adensamento em centroides/face de quadra): PCI = 0.5
+    """
+    df = df.copy()
+    if 'tipologia_bhmap' not in df.columns:
+        df = infer_bhmap_typology(df)
+        
+    df['PCI'] = df['tipologia_bhmap'].apply(lambda x: 1.0 if x == 'Horizontal' else 0.5)
+    return df
