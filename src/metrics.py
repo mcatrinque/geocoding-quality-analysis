@@ -1,253 +1,187 @@
 """
-Módulo de métricas de qualidade e completude.
+metrics.py — Métricas de Qualidade da Geocodificação
+Davis & Fonseca (2007) + ISO 19157
 
-Fornece funções para calcular completude de atributos, RMSE posicional
-e resumos de qualidade da integração CNEFE/BHMap.
+Implementa: LCI, MCI, PCI, GCI, Completude, RMSE, CE90
 """
-
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List
+from rapidfuzz import fuzz
 
 
-def calculate_completeness(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+# ============================================================
+# LCI — Locating Certainty Indicator (Davis & Fonseca, 2007)
+# ============================================================
+def calculate_lci(nv_geo_coord_series, weights_map=None):
     """
-    Calcula a porcentagem de valores preenchidos (não nulos e não vazios) por atributo.
+    Locating Certainty Indicator (LCI) conforme Davis & Fonseca (2007).
+    Mede a certeza da coordenada produzida pelo geocodificador.
+
+    No contexto do CNEFE 2022, o campo NV_GEO_COORD indica o método
+    de obtenção da coordenada:
+        1 = Medido em campo → LCI = 1.0
+        2 = Estimado próximo → LCI = 0.8
+        3 = Estimado distante → LCI = 0.5
+        4 = Outro método → LCI = 0.3
+        6 = Sem medição → LCI = 0.1
 
     Args:
-        df: DataFrame a ser analisado.
-        columns: Lista de nomes de colunas para verificar.
+        nv_geo_coord_series: Series com valores NV_GEO_COORD
+        weights_map: Dicionário {nível: peso}
 
     Returns:
-        DataFrame com colunas 'Attribute', 'Valid Count', 'Missing Count' e 'Completeness (%)'.
+        Series com LCI scores (0.0 a 1.0)
     """
-    stats = []
-    total_rows = len(df)
-
-    if total_rows == 0:
-        return pd.DataFrame()
-
-    for col in columns:
-        if col not in df.columns:
-            continue
-
-        # Considera None, NaN, strings vazias e strings só com espaços como missing
-        is_missing = df[col].isna() | (df[col].astype(str).str.strip() == '')
-
-        valid_count = (~is_missing).sum()
-        completeness_pct = (valid_count / total_rows) * 100
-
-        stats.append({
-            'Attribute': col,
-            'Valid Count': valid_count,
-            'Missing Count': is_missing.sum(),
-            'Completeness (%)': round(completeness_pct, 2)
-        })
-
-    return pd.DataFrame(stats)
+    if weights_map is None:
+        weights_map = {1: 1.0, 2: 0.8, 3: 0.5, 4: 0.3, 6: 0.1}
+    return nv_geo_coord_series.map(weights_map).fillna(0.1)
 
 
-def calculate_positional_rmse(df: pd.DataFrame, error_col: str = 'spatial_distance') -> float:
+# ============================================================
+# Completude — ISO 19157
+# ============================================================
+def calculate_completude(df, campos_pesos=None):
     """
-    Calcula o Root Mean Square Error (RMSE) da distância posicional em metros.
+    Indicador de Completude conforme ISO 19157.
+    Avalia a presença/ausência dos atributos críticos do endereço.
 
     Args:
-        df: DataFrame contendo a coluna de erro.
-        error_col: Nome da coluna com a distância de erro em metros.
+        df: DataFrame com registros de endereço
+        campos_pesos: Dict {nome_coluna: peso}
 
     Returns:
-        RMSE em metros, ou ``np.nan`` se não houver dados válidos.
+        Series com scores de completude (0.0 a 1.0)
     """
-    if error_col not in df.columns or len(df) == 0:
-        return np.nan
+    if campos_pesos is None:
+        campos_pesos = {
+            'CEP': 1.5,
+            'LOGRAD_NUM': 1.5,
+            'COMPLEMENTO': 1.0,
+            'DSC_LOCALIDADE': 0.5,
+            'NV_GEO_COORD': 0.5,
+        }
 
-    valid_errors = df[error_col].dropna()
-    if len(valid_errors) == 0:
-        return np.nan
+    total_weight = sum(campos_pesos.values())
+    scores = np.zeros(len(df))
 
-    rmse = np.sqrt(np.mean(valid_errors ** 2))
-    return round(rmse, 2)
+    for col, weight in campos_pesos.items():
+        if col in df.columns:
+            presence = df[col].notna() & (df[col].astype(str).str.strip() != '')
+            scores += presence.astype(float) * weight
+
+    return scores / total_weight
 
 
-def generate_quality_summary(df: pd.DataFrame, mci_threshold: float = 0.8) -> Dict[str, Any]:
+# ============================================================
+# MCI — Matching Certainty Indicator (Davis & Fonseca, 2007)
+# ============================================================
+def calculate_mci(distance, textual_sim, max_dist=100.0, alpha=0.5):
     """
-    Gera um resumo conciso de qualidade focado nos matches de alta certeza.
+    Matching Certainty Indicator (MCI).
+    Quantifica a confiança no pareamento CNEFE ↔ BHMap usando
+    combinação linear de similaridade espacial e textual.
+
+    MCI = α × Sim_textual + (1-α) × Sim_espacial
 
     Args:
-        df: DataFrame com colunas 'MCI' e 'spatial_distance'.
-        mci_threshold: Limiar mínimo de MCI para considerar alta certeza.
+        distance: Distância euclidiana em metros entre pares
+        textual_sim: Similaridade textual (0 a 100, RapidFuzz)
+        max_dist: Raio máximo de busca (default 100m)
+        alpha: Peso da similaridade textual (default 0.5)
 
     Returns:
-        Dicionário com métricas agregadas de qualidade.
+        Series/array com MCI scores (0.0 a 1.0)
     """
-    high_certainty = df[df['MCI'] >= mci_threshold]
-
-    return {
-        'total_records': len(df),
-        'high_certainty_matches': len(high_certainty),
-        'high_certainty_percent': round((len(high_certainty) / len(df)) * 100, 2) if len(df) > 0 else 0,
-        'average_positional_error_m': round(high_certainty['spatial_distance'].mean(), 2) if 'spatial_distance' in high_certainty else np.nan,
-        'positional_rmse_m': calculate_positional_rmse(high_certainty)
-    }
+    spatial_sim = np.clip(1.0 - (distance / max_dist), 0.0, 1.0)
+    textual_sim_norm = np.clip(textual_sim / 100.0, 0.0, 1.0)
+    return (alpha * textual_sim_norm) + ((1 - alpha) * spatial_sim)
 
 
-def categorize_cnefe_species(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_textual_similarity(str1, str2):
     """
-    Classifica cada registro do CNEFE em categorias analíticas baseadas em espécie e tipo.
+    Calcula similaridade textual entre strings de endereço via RapidFuzz.
+    Usa token_sort_ratio para robustez contra reordenação de tokens.
+    """
+    if pd.isna(str1) or pd.isna(str2):
+        return 0.0
+    return fuzz.token_sort_ratio(str(str1).lower(), str(str2).lower())
 
-    Mapeamento:
-    - Residencial Horizontal: Espécie 1 (Particular) + Tipo 101/102 (Casa/Vila)
-    - Residencial Vertical: Espécie 1 (Particular) + Tipo 103 (Apartamento)
-    - Comercial e Serviços: Espécie 8 (Outras finalidades)
-    - Serviço Público e Social: Espécie 4, 5 ou 6 (Ensino, Saúde, Religioso)
-    - Outros: Outros códigos de espécie ou tipo.
+
+# ============================================================
+# PCI — Positional Certainty Indicator (Davis & Fonseca, 2007)
+# ============================================================
+def calculate_pci(df, tipo_col='COD_TIPO_ESPECI', complemento_col='COMPLEMENTO',
+                  vertical_score=0.5, horizontal_score=1.0):
+    """
+    Positional Certainty Indicator (PCI).
+    Penaliza endereços verticalizados (apartamentos, edifícios) onde
+    a coordenada do ponto não distingue a unidade exata.
+
+    Usa COD_TIPO_ESPECI (103=Apartamento) e/ou padrões no COMPLEMENTO.
 
     Args:
-        df: DataFrame contendo COD_ESPECIE e COD_TIPO_ESPECI.
+        df: DataFrame
+        tipo_col: Coluna com sub-tipo do endereço
+        complemento_col: Coluna com complemento
+        vertical_score: Score PCI para endereços verticais (default 0.5)
+        horizontal_score: Score PCI para endereços horizontais (default 1.0)
 
     Returns:
-        DataFrame com a coluna 'categoria_analitica' adicionada.
+        Series com PCI scores
     """
-    def _get_cat(row):
-        try:
-            esp = int(float(row.get('COD_ESPECIE'))) if row.get('COD_ESPECIE') not in [None, '', 'nan'] else None
-        except (ValueError, TypeError):
-            esp = None
-            
-        try:
-            tipo = int(float(row.get('COD_TIPO_ESPECI'))) if row.get('COD_TIPO_ESPECI') not in [None, '', 'nan'] else None
-        except (ValueError, TypeError):
-            tipo = None
-        
-        # Particular (Residencial)
-        if esp == 1:
-            if tipo in [101, 102]:
-                return 'Residencial Horizontal'
-            elif tipo == 103:
-                return 'Residencial Vertical'
-            return 'Residencial Outros'
-        
-        # Comercial/Serviços
-        if esp == 8:
-            return 'Comercial e Servicos'
-        
-        # Público/Social
-        if esp in [4, 5, 6]:
-            return 'Servico Publico/Social'
-        
-        # Unidade em Construção
-        if esp == 7:
-            return 'Unidade em Construcao'
-        
-        # Domicílio Coletivo
-        if esp == 2:
-            return 'Domicilio Coletivo'
-            
-        return 'Outros'
+    is_vertical = pd.Series(False, index=df.index)
 
-    df = df.copy()
-    df['categoria_analitica'] = df.apply(_get_cat, axis=1)
-    return df
+    # Via COD_TIPO_ESPECI (103 = Apartamento)
+    if tipo_col in df.columns:
+        is_vertical |= (df[tipo_col] == 103).fillna(False)
+
+    # Via COMPLEMENTO (contém "APARTAMENTO", "EDIFÍCIO", "BLOCO", etc.)
+    if complemento_col in df.columns:
+        pattern = r'apartamento|edif[ií]cio|condom[ií]nio|bloco|sala|loja|andar|cobertura'
+        is_vertical |= df[complemento_col].astype(str).str.contains(
+            pattern, case=False, na=False
+        )
+
+    return np.where(is_vertical.values, vertical_score, horizontal_score)
 
 
-def infer_bhmap_typology(df: pd.DataFrame) -> pd.DataFrame:
+# ============================================================
+# GCI — Geocoding Certainty Indicator (Davis & Fonseca, 2007)
+# ============================================================
+def calculate_gci(lci, mci, pci):
     """
-    Infere a tipologia (Horizontal/Vertical) no BHMap baseada na densidade de endereços.
-    
-    Lógica: Coordenadas com mais de um endereço são classificadas como 'Vertical',
-    indicando edifícios de apartamentos ou salas comerciais.
-    
-    Args:
-        df: DataFrame do BHMap (contendo geometry).
-        
-    Returns:
-        DataFrame com a coluna 'tipologia_bhmap' adicionada.
+    Geocoding Certainty Indicator: GCI = LCI × MCI × PCI
+    Métrica composta que integra as três dimensões de certeza.
     """
-    df = df.copy()
-    # Identifica duplicatas espaciais (tenta geometry ou wkt_geometry)
-    geo_col = 'geometry' if 'geometry' in df.columns else 'wkt_geometry'
-    
-    if geo_col not in df.columns:
-        # Fallback para não quebrar se não houver coluna espacial
-        df['tipologia_bhmap'] = 'Horizontal'
-        df['address_count'] = 1
-        return df
-
-    counts = df.groupby(geo_col).size().reset_index(name='address_count')
-    counts['tipologia_bhmap'] = counts['address_count'].apply(
-        lambda x: 'Vertical' if x > 1 else 'Horizontal'
-    )
-    
-    return df.merge(counts[[geo_col, 'tipologia_bhmap', 'address_count']], on=geo_col, how='left')
+    return lci * mci * pci
 
 
-def calculate_match_rate_by_category(df_cnefe: pd.DataFrame, matched_ids: List[Any]) -> pd.DataFrame:
-    """
-    Calcula a taxa de pareamento (Matching Rate) para cada categoria do CNEFE.
-    
-    Args:
-        df_cnefe: DataFrame original do CNEFE com categoria_analitica.
-        matched_ids: Lista de identificadores únicos do CNEFE que foram pareados.
-        
-    Returns:
-        DataFrame com colunas Category, Total, Matched, and Match Rate (%).
-    """
-    df_cnefe = df_cnefe.copy()
-    df_cnefe['is_matched'] = df_cnefe['id_cnefe'].isin(matched_ids)
-    
-    summary = df_cnefe.groupby('categoria_analitica').agg(
-        Total=('id_cnefe', 'count'),
-        Matched=('is_matched', 'sum')
-    ).reset_index()
-    
-    summary['Match Rate (%)'] = (summary['Matched'] / summary['Total'] * 100).round(2)
-    return summary.rename(columns={'categoria_analitica': 'Category'})
+# ============================================================
+# Métricas Posicionais
+# ============================================================
+def calculate_rmse(distances):
+    """Root Mean Square Error das distâncias euclidianas."""
+    d = np.asarray(distances, dtype=float)
+    d = d[~np.isnan(d)]
+    return np.sqrt(np.mean(np.square(d)))
 
 
-def calculate_ce90(df: pd.DataFrame, error_col: str = 'spatial_distance') -> float:
-    """
-    Calcula o Circular Error 90% (CE90) da distância posicional em metros.
-    Representa o raio que engloba 90% dos erros posicionais medidos.
-    """
-    if error_col not in df.columns or len(df) == 0:
-        return np.nan
-
-    valid_errors = df[error_col].dropna()
-    if len(valid_errors) == 0:
-        return np.nan
-
-    ce90 = float(np.percentile(valid_errors.abs(), 90))
-    return round(ce90, 2)
+def calculate_ce90(distances):
+    """Circular Error 90%: raio que contém 90% dos erros."""
+    d = np.asarray(distances, dtype=float)
+    d = d[~np.isnan(d)]
+    return np.percentile(d, 90)
 
 
-def categorize_formal_informal_toponymy(df: pd.DataFrame, street_col: str = 'std_tipo_logradouro') -> pd.DataFrame:
-    """
-    Classifica o tipo de logradouro em Formal ou Informal.
-    Formal: RUA, AVENIDA, PRACA, RODOVIA, etc.
-    Informal: BECO, VILA, ESCADARIA, TRAVESSA, VIELA, ALPE, etc.
-    """
-    df = df.copy()
-    if street_col not in df.columns:
-        df['toponimia_formalidade'] = 'Desconhecido'
-        return df
-
-    informal_types = ['BEC', 'VIL', 'ESC', 'TRA', 'VIE', 'PAS', 'AL', 'CAM']
-    formality_map = lambda x: 'Informal' if str(x).strip().upper() in informal_types else 'Formal'
-    
-    df['toponimia_formalidade'] = df[street_col].apply(formality_map)
-    return df
+def calculate_mae(distances):
+    """Mean Absolute Error das distâncias."""
+    d = np.asarray(distances, dtype=float)
+    d = d[~np.isnan(d)]
+    return np.mean(np.abs(d))
 
 
-def calculate_pci(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcula o Positional Certainty Index (PCI) empírico, baseado na tipologia inferida.
-    De acordo com Davis Jr., incerteza posicional baseada na consolidação de geometrias.
-    - Horizontal (Isolado/Próximo Lote único): PCI = 1.0
-    - Vertical (Adensamento em centroides/face de quadra): PCI = 0.5
-    """
-    df = df.copy()
-    if 'tipologia_bhmap' not in df.columns:
-        df = infer_bhmap_typology(df)
-        
-    df['PCI'] = df['tipologia_bhmap'].apply(lambda x: 1.0 if x == 'Horizontal' else 0.5)
-    return df
+def calculate_median_error(distances):
+    """Erro mediano — mais robusto que RMSE a outliers."""
+    d = np.asarray(distances, dtype=float)
+    d = d[~np.isnan(d)]
+    return np.median(d)

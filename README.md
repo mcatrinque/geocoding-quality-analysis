@@ -1,218 +1,75 @@
-# Análise de Qualidade e Incerteza de Dados Geoespaciais
-
-**Estudo Empírico do CNEFE 2022 frente ao BHMap Endereços**
-
-Repositório oficial da Dissertação de Mestrado em Ciência da Computação — UFMG.
-
----
+# AVALIAÇÃO DA QUALIDADE DE GEOCODIFICAÇÃO: CNEFE 2022 E A BASE OFICIAL DO MUNICÍPIO DE BELO HORIZONTE
 
 ## Introdução
+A geocodificação é o processo fundamental de transformação de descrições textuais de localização, como endereços, em coordenadas geográficas precisas. Na análise de políticas públicas e estudos socioespaciais, a qualidade dessa conversão afeta diretamente a validade dos modelos gerados.
 
-A geocodificação — processo de converter endereços textuais em coordenadas geográficas — é fundamental para políticas públicas, logística, saúde e planejamento urbano. Contudo, as bases de endereços brasileiras possuem lacunas estruturais que propagam incertezas nos sistemas de informação geográfica (GIS) que as consomem.
+Este projeto compõe a pesquisa de dissertação de mestrado em Ciência da Computação pela Universidade Federal de Minas Gerais (UFMG). O trabalho propõe uma avaliação rigorosa e em múltiplas escalas da qualidade posicional, lógica e espacial do Cadastro Nacional de Endereços para Fins Estatísticos (CNEFE), referente ao Censo Demográfico de 2022 do IBGE. Para isso, utiliza-se a base ofical e georreferenciada de endereços e lotes do portal de dados abertos da Prefeitura de Belo Horizonte (BHMap) como _Gold Standard_ (padrão-ouro).
 
-Este projeto avalia empiricamente a **qualidade** e a **incerteza** dos dados de geocodificação do **Cadastro Nacional de Endereços para Fins Estatísticos (CNEFE 2022)** do IBGE, utilizando a base municipal **BHMap Endereços** (Belo Horizonte — MG) como *Gold Standard* de referência.
-
-A metodologia segue o arcabouço de Davis & Fonseca (2007), estruturando a análise em torno dos indicadores de certeza **PCI**, **MCI**, **LCI** e **GCI**, e incorporando técnicas estadísticas avançadas de autocorrelação espacial (Moran / LISA) e regressão multivariada (OLS) para quantificar os fatores urbanos que influenciam a degradação da acurácia posicional.
+O repositório consolida o pipeline completo de processamento de dados, cruzamento espacial e análise estatística, culminando na geração de métricas de incerteza (GCI, LCI, MCI, PCI) e modelagem espacial para entender como o erro de geocodificação se distribui e a quem ele afeta.
 
 ## Objetivos
-
-1. **Completude**: Quantificar lacunas e taxas de preenchimento dos atributos do CNEFE 2022.
-2. **Acurácia Posicional**: Mensurar o erro posicional médio (RMSE) entre pares de endereços geocodificados.
-3. **Incerteza (MCI)**: Modelar a certeza de correspondência via matching espacial (R-Tree) + fuzzy textual (Token Sort Ratio).
-4. **Autocorrelação Espacial**: Identificar clusters de erro via Moran's I e LISA.
-5. **Fatores Socio-Espaciais**: Investigar se variáveis urbanas (informalidade, conurbação, complexidade viária, adensamento) explicam a degradação da qualidade.
-
----
+- **Estimar a Acurácia Posicional**: Medir o erro em metros entre a geocodificação do IBGE e o dado oficial municipal (RMSE, Erro Circular 90%).
+- **Mensurar a Incerteza (Certainty Indicators)**: Aplicar e expandir os índices clássicos de avaliação (Positional, Match e Locating Certainty Indicators) para criar um panorama holístico de confiança do dado.
+- **Identificar Vieses Geográficos e Sociais**: Descobrir se a qualidade da geocodificação varia de acordo com o valor imobiliário, tipologia construtiva (verticalização) ou proteção social das áreas urbanas (determinismo topográfico e hierarquia viária).
 
 ## Metodologia
+A pesquisa é estruturada em três estágios essenciais: preparação de dados, cálculo de métricas e análise socioespacial. O fluxo pode ser acompanhado através dos *notebooks* presentes neste repositório.
 
-### Pipeline de Dados
+### Coleta e Preparação de Dados
+A extração compreende os endereços do CNEFE 2022 (IBGE) filtrados para o município de Belo Horizonte. A etapa de validação ocorre por meio de junção espacial (spatial join) e métricas de similaridade de strings (Fuzzy Matching) contra a base do BHMap, delimitando os pares-alvo da análise.
 
-O fluxo completo de processamento é reprodutível via um único comando. A arquitetura segue o padrão ETL → Matching → Análise:
+### Modelagem de Qualidade (Métricas)
+As métricas quantificam a qualidade da correspondência:
+- **LCI (Locating Certainty)**: Credibilidade do método de coleta (GPS, estimativa).
+- **PCI (Positional Certainty)**: Penalização baseada na verticalização estrutural (identificação de apartamentos).
+- **MCI (Match Certainty)**: Confiança da associação baseada na distância euclidiana combinada à similaridade textual.
+- **GCI (Geocoding Certainty)**: O índice global derivado das incertezas constituintes.
 
-```
-data/raw/cnefe2022/*.json ─┐
-                           ├──► etl_pipeline.py (DuckDB) ──► data/processed/*.parquet
-data/raw/bhmap/*.shp ──────┘
-                                        │
-                            ┌───────────┘
-                            ▼
-              NB 01: Setup & Ingestão (reprojeção UTM 23S)
-                            │
-                            ▼
-              NB 02: Matching Híbrido (R-Tree + RapidFuzz)
-                            │
-                            ▼
-              data/processed/cnefe_match_bhmap.parquet
-                            │
-              ┌─────────────┼─────────────┐─────────────┐
-              ▼             ▼             ▼             ▼
-          NB 03          NB 04         NB 05         NB 06
-        Completude   Acurácia      ESDA/LISA    Socio-Espacial
-        (missingno)  (Violin/      (PySAL/      (geobr/osmnx/
-                      Seaborn)      Folium)      OLS)
-```
-
-### Técnicas Utilizadas
-
-| Etapa | Técnica | Biblioteca |
-|---|---|---|
-| Extração | SQL analítico sobre JSON massivo (5.5 GB) | DuckDB |
-| Normalização | Remoção de diacríticos, uppercase, colapso de espaços | Pandas / unicodedata |
-| Busca Espacial | R-Tree (sjoin_nearest, raio de 50m) | GeoPandas |
-| Matching Textual | Token Sort Ratio (Levenshtein) | RapidFuzz |
-| EDA | Matriz de nulidade, gráficos interativos | missingno, Plotly |
-| Distribuição de Erro | Histograma com marginal Violin, Pairplot | Plotly, Seaborn |
-| Consistência Semântica | Matriz de confusão normalizada (tipo de logradouro) | Plotly |
-| Autocorrelação Global | I de Moran (permutação p < 0.05) | PySAL / esda |
-| Clusters Locais | LISA (High-High, Low-Low) | PySAL / splot / Folium |
-| Hexbin Maps | Densidade hexagonal sobre CartoDB | Plotly |
-| Fronteiras Municipais | Distância ao limite municipal (efeito de borda) | geobr |
-| Informalidade Urbana | Aglomerados subnormais do IBGE | geobr |
-| Complexidade Viária | Interseções por km² da malha OSM | OSMnx |
-| Regressão Espacial | OLS multivariado (StandardScaler) | statsmodels / sklearn |
-
----
+### Análise Estatística e Espacial
+O rigor científico é provido através de métodos que avaliam a não-estacionariedade espacial e os fenômenos globais:
+- **Bootstrap Confidence Intervals**: Estimativa robusta do erro populacional.
+- **Geographically Weighted Regression (GWR)**: Modelagem da variação local do impacto construtivo no erro.
+- **Local Spatial Autocorrelation (LISA)**: Identificação de _hot_ e _cold spots_ espaciais (Getis-Ord Gi*).
+- **Random Forest e SHAP**: Avaliação da contribuição independente dos preditores topográficos e socioeconômicos para a geração da incerteza espacial.
 
 ## Estrutura do Repositório
+Para facilitar a navegabilidade e a experimentação iterativa, o projeto adota a seguinte arquitetura de pastas:
 
-```
-geocoding-quality-analysis/
-│
+```text
 ├── data/
-│   ├── raw/                          # Dados brutos (CNEFE JSON + BHMap Shapefile)
-│   └── processed/                    # Parquets processados (ETL + matching)
-│
-├── notebooks/
-│   ├── 01_setup_ingest.ipynb         # Ingestão e reprojeção geográfica
-│   ├── 02_address_matching.ipynb     # Motor híbrido de pareamento
-│   ├── 03_completeness_analysis.ipynb # Análise de completude (missingno + Plotly)
-│   ├── 04_quality_and_accuracy.ipynb  # Acurácia posicional (Violin + Confusão)
-│   ├── 05_spatial_uncertainty_viz.ipynb # ESDA: Moran, LISA, Hexbin, Folium
-│   └── 06_socio_spatial_vulnerability.ipynb # Regressão OLS socio-espacial
-│
-├── src/
-│   ├── config.py                     # Configuração centralizada (paths, CRS)
-│   ├── etl_pipeline.py               # Pipeline ETL (DuckDB + Pandas)
-│   ├── matching.py                   # Motor de matching espacial + fuzzy
-│   ├── metrics.py                    # Métricas de qualidade (RMSE, completude, MCI)
-│   ├── maps.py                       # Visualizações cartográficas (KDE, barras)
-│   └── log_config.py                 # Logging estruturado (structlog)
-│
-├── outputs/
-│   ├── figures/                      # Gráficos exportados (HTML interativos + PNG)
-│   ├── maps/                         # Mapas gerados
-│   └── tables/                       # Tabelas de resultados
-│
-├── references/                       # Artigos de referência da dissertação
-├── tasks.py                          # Orquestrador de tarefas (PyInvoke)
-├── requirements.txt                  # Dependências Python
-└── .gitignore
+│   ├── processed/          # Bases refinadas após matching e enriquecimento
+│   └── raw/                # Bases originais do IBGE e BHMap (shapefiles)
+├── notebooks/              # Core analítico do projeto
+│   ├── 01_ingestao.ipynb
+│   ├── 02_matching.ipynb
+│   ├── 03_qualidade_logica.ipynb
+│   ├── 04_acuracia_incerteza.ipynb
+│   ├── 05_segmentacao_tipologica.ipynb
+│   ├── 06_analise_socioespacial.ipynb
+│   └── 07_sintese_final.ipynb
+├── outputs/                # Artefatos gerados pela análise
+│   ├── figures/            # Gráficos (PNG, SVG)
+│   ├── maps/               # Mapas interativos (HTML)
+│   └── tables/             # Tabelas consolidadas (CSV)
+├── references/             # Documentação de apoio e planejamento metodológico
+├── src/                    # Scripts Python com as funções core da dissertação
+│   ├── config.py           # Configuração de caminhos e dicionários base
+│   ├── metrics.py          # Implementação LCI, MCI, PCI, GCI e RMSE
+│   └── segments.py         # Segmentação estatística (Kruskal-Wallis, etc)
+└── README.md
 ```
-
----
 
 ## Como Executar
+1. Clone este repositório para o seu ambiente local.
+2. Certifique-se de que os arquivos do CNEFE 2022 e as bases do BHMap estão devidamente dispostos na pasta `data/raw/`.
+3. Crie e ative um ambiente virtual com as dependências necessárias, conforme listado em `requirements.txt`.
+4. Execute os *Jupyter Notebooks* situados no diretório `notebooks/` de forma sequencial, iniciando em `01_ingestao.ipynb` para reconstruir integralmente o pipeline.
 
-O projeto utiliza [PyInvoke](https://www.pyinvoke.org/) para orquestrar todas as etapas do pipeline de forma reprodutível.
-
-### Pré-requisitos
-
-- Python 3.10+
-- Os dados brutos devem ser colocados manualmente em `data/raw/`:
-  - **CNEFE 2022 (MG)**: `data/raw/cnefe2022/qg_810_endereco_UF31.json` — baixar do [portal do IBGE](https://www.ibge.gov.br/estatisticas/downloads-estatisticas.html).
-  - **BHMap Endereços**: `data/raw/bhmap/bhmap.shp` — baixar do [portal de dados abertos da PBH](https://dados.pbh.gov.br/).
-
-### Instalação
-
-```bash
-# Criar e ativar ambiente virtual
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# Linux / macOS
-source .venv/bin/activate
-
-# Instalar dependências e verificar dados
-pip install -r requirements.txt
-inv setup
-```
-
-### Comandos Disponíveis
-
-| Comando | Descrição |
-|---|---|
-| `inv setup` | Instala dependências e verifica integridade dos dados brutos. |
-| `inv clean` | Remove outputs e dados processados para um estado limpo. |
-| `inv etl` | Executa a extração e normalização via DuckDB → Parquet. |
-| `inv match` | Roda os notebooks de ingestão (01) e matching (02). |
-| `inv analyze` | Roda os notebooks analíticos (03–06), gerando gráficos e mapas. |
-| `inv all` | **Pipeline completo** (setup → clean → etl → match → analyze). |
-
-Para reproduzir toda a dissertação do zero:
-
-```bash
-inv all
-```
-
-Os gráficos interativos serão exportados em `outputs/figures/` (HTML e PNG).
-
----
-
-## Notebooks
-
-### 01 — Setup & Ingestão
-Carrega os Parquets do ETL, aplica a reprojeção para SIRGAS 2000 / UTM 23S (`EPSG:31983`) e gera um overview espacial dos dados sobre o município de Belo Horizonte.
-
-### 02 — Matching Híbrido
-Implementa o motor de pareamento em duas etapas: (1) busca espacial via R-Tree com raio de 50 metros e (2) scoring fuzzy via Token Sort Ratio (RapidFuzz). Calcula o **Match Certainty Indicator (MCI)** normalizado [0, 1] e resolve desempates por proximidade espacial.
-
-### 03 — Análise de Completude
-Avalia a completude estrutural dos atributos do CNEFE utilizando a biblioteca `missingno` (Nullity Matrix) e gráficos interativos Plotly. Quantifica endereços órfãos (MCI = 0) e taxas de preenchimento por campo.
-
-### 04 — Qualidade e Acurácia Posicional
-Foca nos registros de alta certeza (MCI ≥ 0.8) para mensurar o RMSE posicional. Inclui histograma com marginal Violin (Plotly), matriz de dispersão multivariada (Seaborn Pairplot) e matriz de confusão semântica normalizada entre tipos de logradouro.
-
-### 05 — Incerteza Espacial (ESDA)
-Aplica Análise Exploratória de Dados Espaciais: Hexbin Map interativo (Plotly), I de Moran Global (PySAL/esda), LISA clusters significantes (p < 0.05) e mapa interativo Folium com os agrupamentos High-High e Low-Low.
-
-### 06 — Análise Socio-Espacial e Ambiental
-Investiga os fatores urbanos que explicam a degradação da acurácia: distância à fronteira municipal (geobr), presença em aglomerados subnormais (geobr), complexidade da malha viária (OSMnx) e adensamento de endereços. Aplica regressão multivariada OLS (statsmodels) com variáveis padronizadas.
-
----
+Em caso de dúvidas sobre a reprodução do ambiente, as versões fixadas dos pacotes Python asseguram a estabilidade da simulação metodológica do estudo de caso.
 
 ## Referências
+Os algoritmos de métricas de certeza aplicados derivam majoritariamente de adaptações da literatura de Davis Jr. & Fonseca (2007) aplicadas para a escala massiva do IBGE.
+- *DAVIS JR, Clodoveu A.; FONSECA, Frederico T.* Certeza na geocodificação de endereços. Em: Anais do VIII Simpósio Brasileiro de Geoinformática (GeoInfo). 2007.
 
-### Modelagem de Incertezas e Geocodificação
-- Davis Jr., C. A. (2011). *Avaliação do uso de uma base de referência municipal para auxiliar os processos de geocodificação*.
-- Davis Jr., C. A., & Fonseca, F. T. (2007). *Assessing the Certainty of Locations Produced by an Address Geocoding System*. Geoinformatica, 11(1), 103–129.
-- Davis Jr., C. A., Fonseca, F. T., & Borges, K. A. V. (2003). *A flexible addressing system for approximate geocoding*.
-
-### Qualidade de Dados Geográficos
-- ISO 19157:2013. *Geographic information — Data quality*.
-- Guptill, S. C., & Morrison, J. L. (Eds.). (1995). *Elements of Spatial Data Quality*. Elsevier.
-
-### Geocodificação e Acurácia Posicional
-- Zandbergen, P. A. (2008). *A comparison of address point, parcel and street geocoding techniques*.
-- Goldberg, D. W., Wilson, J. P., & Knoblock, C. A. (2007). *From Text to Geographic Coordinates: The Current State of Geocoding*.
-
-### Record Linkage
-- Fellegi, I. P., & Sunter, A. B. (1969). *A Theory for Record Linkage*. JASA.
-- Christen, P. (2012). *Data Matching*. Springer.
-
-### Estatística Espacial
-- Anselin, L. (1995). *Local Indicators of Spatial Association—LISA*. Geographical Analysis.
-
-### Fontes de Dados
-- **IBGE.** (2022). *CNEFE — Cadastro Nacional de Endereços para Fins Estatísticos*.
-- **PBH (Prodabel).** (2025). *BHMap Endereços — Geolocalização Oficial Municipal*.
-
----
-
-## Autor
-
-**Mateus Rezende de Sá Catrinque**
-Mestrando em Ciência da Computação — UFMG
-[github.com/mcatrinque](https://github.com/mcatrinque)
+## About
+Pesquisa de Dissertação (M.Sc.) em Ciência da Computação (UFMG) explorando incerteza posicional, geocodificação de endereços e desigualdade espacial via Open Data em Belo Horizonte.
