@@ -3,6 +3,7 @@ metrics.py — Métricas de Qualidade da Geocodificação
 Davis & Fonseca (2007) + ISO 19157
 
 Implementa: LCI, MCI, PCI, GCI, Completude, RMSE, CE90
+Métricas de coordenada (intrínsecas): CCR, CDI, DRS, PCI_empirico
 """
 import numpy as np
 import pandas as pd
@@ -185,3 +186,161 @@ def calculate_median_error(distances):
     d = np.asarray(distances, dtype=float)
     d = d[~np.isnan(d)]
     return np.median(d)
+
+
+# ============================================================
+# Métricas de Coordenada — qualidade intrínseca do ponto no espaço
+# Complementam as métricas de endereço (MCI/GCI) com avaliação
+# da coordenada como objeto geográfico, independente de referência externa.
+# ============================================================
+
+def calculate_cdi(gdf, coord_precision_m=1):
+    """
+    CDI — Coordinate Duplication Index.
+    Conta quantos registros compartilham a mesma coordenada (arredondada
+    à precisão dada em metros). Coordenadas compartilhadas indicam
+    estimativa em massa (centróide de quadra, ponto de rua) em vez de
+    medição individual.
+
+    Valores: n >= 1. CDI=1 → coordenada única (boa). CDI=N → N registros
+    no mesmo ponto (estimativa).
+
+    Retorna duas Series:
+        cdi        : contagem bruta de registros no mesmo ponto
+        pci_empirico: 1/cdi ∈ (0, 1] — substituto empírico para PCI arbitrário
+
+    Args:
+        gdf: GeoDataFrame com geometria UTM (metros)
+        coord_precision_m: arredondamento em metros (default=1m)
+
+    Returns:
+        DataFrame com colunas [cdi, pci_empirico] no mesmo índice de gdf
+    """
+    x = (gdf.geometry.x / coord_precision_m).round().astype(int)
+    y = (gdf.geometry.y / coord_precision_m).round().astype(int)
+    coord_key = x.astype(str) + "_" + y.astype(str)
+
+    cdi = coord_key.map(coord_key.value_counts())
+    pci_empirico = (1.0 / cdi).clip(upper=1.0)
+
+    return pd.DataFrame({'cdi': cdi, 'pci_empirico': pci_empirico}, index=gdf.index)
+
+
+def calculate_ccr(gdf_cnefe, gdf_setores, setor_col_cnefe='COD_SETOR',
+                  setor_col_poly='COD_SETOR', normalize_setor=True):
+    """
+    CCR — Coordinate Containment Rate (por registro).
+    Verifica se a coordenada do CNEFE cai dentro do polígono do setor
+    censitário declarado no campo COD_SETOR. Discrepância indica erro
+    topológico na coordenada ou atribuição incorreta de setor.
+
+    Args:
+        gdf_cnefe: GeoDataFrame CNEFE (UTM, com COD_SETOR como atributo)
+        gdf_setores: GeoDataFrame dos setores censitários (polígonos UTM)
+        setor_col_cnefe: coluna em gdf_cnefe com código do setor declarado
+        setor_col_poly: coluna em gdf_setores com código do setor
+        normalize_setor: remove sufixo 'P' do CNEFE (formato IBGE vs BHMap)
+
+    Returns:
+        Series booleana `within_declared_setor` (True=OK, False=erro topológico)
+    """
+    import geopandas as gpd
+
+    # Spatial join: descobre em qual setor a coordenada realmente cai
+    setores_proj = gdf_setores[[setor_col_poly, 'geometry']].copy()
+    setores_proj = setores_proj.rename(columns={setor_col_poly: 'setor_real'})
+
+    joined = gpd.sjoin(
+        gdf_cnefe[[setor_col_cnefe, 'geometry']],
+        setores_proj,
+        how='left',
+        predicate='within'
+    )
+
+    setor_declarado = joined[setor_col_cnefe].astype(str).str.strip()
+    if normalize_setor:
+        # CNEFE usa sufixo 'P' (e.g. '310620005630498P'); shapefile não usa
+        setor_declarado = setor_declarado.str.rstrip('P').str.rstrip('S')
+
+    setor_real = joined['setor_real'].astype(str).str.strip()
+
+    within = (setor_declarado == setor_real)
+    within = within.reindex(gdf_cnefe.index)
+    within = within.fillna(False)
+    return within
+
+
+def calculate_drs(gdf_cnefe, gdf_vias, batch_size=50_000):
+    """
+    DRS — Distance to Road Segment (metros).
+    Distância de cada ponto CNEFE ao segmento de via mais próximo.
+    Alta DRS indica ponto em área sem logradouro próximo (morro, praça,
+    área industrial) ou coordenada deslocada da via declarada.
+
+    Usa sjoin_nearest contra a rede viária (LineStrings UTM).
+    Processado em lotes para controlar uso de memória.
+
+    Args:
+        gdf_cnefe: GeoDataFrame CNEFE (UTM)
+        gdf_vias: GeoDataFrame de vias (LineStrings UTM)
+        batch_size: tamanho do lote para processamento
+
+    Returns:
+        Series float com distância em metros, mesmo índice de gdf_cnefe
+    """
+    import geopandas as gpd
+    from tqdm.auto import tqdm
+
+    vias = gdf_vias[['geometry']].copy()
+    results = []
+    idx_list = gdf_cnefe.index.tolist()
+
+    for start in tqdm(range(0, len(idx_list), batch_size), desc="  Distância às vias", unit="lote"):
+        batch_idx = idx_list[start:start + batch_size]
+        batch = gdf_cnefe.loc[batch_idx, ['geometry']]
+        joined = gpd.sjoin_nearest(batch, vias, how='left', distance_col='drs')
+        # sjoin_nearest pode duplicar se houver empate; manter o menor
+        joined = joined[~joined.index.duplicated(keep='first')]
+        results.append(joined['drs'])
+
+    drs_series = pd.concat(results)
+    drs_series = drs_series.reindex(gdf_cnefe.index)
+    return drs_series
+
+
+def calculate_csi(gdf_cnefe, gdf_setores, setor_col_cnefe='COD_SETOR',
+                  setor_col_poly='COD_SETOR', normalize_setor=True):
+    """
+    CSI — Coordinate Spatial Isolation (metros).
+    Distância do ponto CNEFE ao centróide do seu setor censitário declarado.
+    Pontos muito distantes do centróide de seu setor são candidatos a erro
+    de atribuição ou deslocamento grosseiro de coordenada.
+
+    Args:
+        gdf_cnefe: GeoDataFrame CNEFE (UTM)
+        gdf_setores: GeoDataFrame dos setores (UTM, polígonos)
+        normalize_setor: remove sufixo 'P' do CNEFE (formato IBGE vs BHMap)
+
+    Returns:
+        Series float com distância ao centróide do setor (metros)
+    """
+    setores_centroids = gdf_setores[[setor_col_poly, 'geometry']].copy()
+    setores_centroids['centroid'] = setores_centroids.geometry.centroid
+    centroid_map = setores_centroids.set_index(setor_col_poly)['centroid'].to_dict()
+
+    setor_declared = gdf_cnefe[setor_col_cnefe].astype(str).str.strip()
+    if normalize_setor:
+        setor_declared = setor_declared.str.rstrip('P').str.rstrip('S')
+
+    centroids = setor_declared.map(centroid_map)
+    valid_mask = centroids.notna()
+    distances = pd.Series(np.nan, index=gdf_cnefe.index)
+
+    if valid_mask.any():
+        pts = gdf_cnefe.loc[valid_mask, 'geometry']
+        ctrs = centroids[valid_mask]
+        import geopandas as gpd
+        ctrs_gs = gpd.GeoSeries(ctrs, crs=gdf_cnefe.crs)
+        distances[valid_mask] = pts.distance(ctrs_gs)
+
+    return distances

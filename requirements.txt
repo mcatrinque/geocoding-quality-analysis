@@ -1,6 +1,10 @@
+tqdm
+rich
+nbclient
 pandas
 geopandas
-duckdb
+pyogrio
+duckdb>=1.1.0
 pyarrow
 plotly
 seaborn
@@ -9,7 +13,6 @@ matplotlib
 contextily
 folium
 mapclassify
-pysal
 libpysal
 splot
 jupyter
@@ -17,12 +20,19 @@ notebook
 nbconvert
 invoke
 rapidFuzz
-numpy<2
+numpy
 structlog
-geobr
 osmnx
 statsmodels
 mgwr
-scipy>=1.12,<1.15
+scipy>=1.15
 scikit-learn
+shap
+esda
+spreg
 kaleido==0.2.1
+ipywidgets
+# Nota: a extensão espacial do DuckDB é instalada em runtime (não é pacote pip).
+# Execute no notebook: con.execute("INSTALL spatial; LOAD spatial;")
+# ou rode: python -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL spatial')"
+
