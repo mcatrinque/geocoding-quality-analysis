@@ -16,25 +16,49 @@ FIG_DIR = OUTPUT_DIR / 'figures'
 MAP_DIR = OUTPUT_DIR / 'maps'
 TAB_DIR = OUTPUT_DIR / 'tables'
 
-# Context layers
+# ── Camadas de contexto brutas (shapefiles) ──────────────────────────────────
 CONTEXT_DIR = RAW_DIR / 'bhmap_context'
-REGIONAIS_SHP = CONTEXT_DIR / 'REGIONAL' / 'REGIONAL.shp'
-BAIRROS_SHP = CONTEXT_DIR / 'BAIRRO_OFICIAL' / 'BAIRRO_OFICIAL.shp'
-VILAS_FAVELAS_SHP = CONTEXT_DIR / 'VILA_FAVELA' / 'VILA_FAVELA.shp'
-POP_BAIRRO_SHP = CONTEXT_DIR / 'POP_DOMIC_BAIRRO_2022' / 'POP_DOMIC_BAIRRO_2022.shp'
+REGIONAIS_SHP            = CONTEXT_DIR / 'REGIONAL'                       / 'REGIONAL.shp'
+BAIRROS_SHP              = CONTEXT_DIR / 'BAIRRO_OFICIAL'                 / 'BAIRRO_OFICIAL.shp'
+VILAS_FAVELAS_SHP        = CONTEXT_DIR / 'VILA_FAVELA'                    / 'VILA_FAVELA.shp'
+SETOR_CENSITARIO_SHP     = CONTEXT_DIR / 'SETOR_CENSITARIO_2022'          / 'SETOR_CENSITARIO_2022.shp'
+TIPOLOGIA_USO_SHP        = CONTEXT_DIR / 'TIPOLOGIA_USO_OCUPACAO_LOTE_2022' / 'TIPOLOGIA_USO_OCUPACAO_LOTE_2022.shp'
+CLASSIFICACAO_VIARIA_SHP = CONTEXT_DIR / 'CLASSIFICACAO_VIARIA_11181'     / 'CLASSIFICACAO_VIARIA_11181.shp'
+DECLIVIDADE_SHP          = CONTEXT_DIR / 'DECLIVIDADE_TRECHO_LOGRADOURO_2015' / 'DECLIVIDADE_TRECHO_LOGRADOURO_2015.shp'
+ATIVIDADE_ECONOMICA_SHP  = CONTEXT_DIR / 'ATIVIDADE_ECONOMICA'            / 'ATIVIDADE_ECONOMICA.shp'
+ZONEAMENTO_SHP           = CONTEXT_DIR / 'ZONEAMENTO_11181'               / 'ZONEAMENTO_11181.shp'
 
-# v4 context layers
-SETOR_CENSITARIO_SHP = CONTEXT_DIR / 'SETOR_CENSITARIO_2022' / 'SETOR_CENSITARIO_2022.shp'
-TIPOLOGIA_USO_SHP = CONTEXT_DIR / 'TIPOLOGIA_USO_OCUPACAO_LOTE_2022' / 'TIPOLOGIA_USO_OCUPACAO_LOTE_2022.shp'
-CLASSIFICACAO_VIARIA_SHP = CONTEXT_DIR / 'CLASSIFICACAO_VIARIA_11181' / 'CLASSIFICACAO_VIARIA_11181.shp'
-DECLIVIDADE_SHP = CONTEXT_DIR / 'DECLIVIDADE_TRECHO_LOGRADOURO_2015' / 'DECLIVIDADE_TRECHO_LOGRADOURO_2015.shp'
-ATIVIDADE_ECONOMICA_SHP = CONTEXT_DIR / 'ATIVIDADE_ECONOMICA' / 'ATIVIDADE_ECONOMICA.shp'
+# ZONA_IPTU_SHP mantido para compatibilidade retroativa — preferir CADASTRO_LOTES_PARQUET
 ZONA_IPTU_SHP = CONTEXT_DIR / 'ZONA_HOMOGENEA_IPTU' / 'ZONA_HOMOGENEA_IPTU.shp'
-ZONEAMENTO_SHP = CONTEXT_DIR / 'ZONEAMENTO_11181' / 'ZONEAMENTO_11181.shp'
 
-# Legacy aliases for older notebook cells
-IPTU_SHP = ZONA_IPTU_SHP
+# Legacy aliases
+IPTU_SHP          = ZONA_IPTU_SHP
 LOTE_TIPOLOGIA_SHP = TIPOLOGIA_USO_SHP
+POP_BAIRRO_SHP    = CONTEXT_DIR / 'POP_DOMIC_BAIRRO_2022' / 'POP_DOMIC_BAIRRO_2022.shp'
+
+# ── Camadas processadas (GeoParquet — preferir sobre os shapefiles acima) ────
+# Gerados por scripts/process_context_layers.py
+EDIFICACAO_PARQUET      = PROCESSED_DIR / 'edificacao.parquet'
+AREA_RISCO_PARQUET      = PROCESSED_DIR / 'area_risco.parquet'
+IVS_PARQUET             = PROCESSED_DIR / 'ivs.parquet'
+LOTE_CTM_PARQUET        = PROCESSED_DIR / 'lote_ctm.parquet'
+BAIRRO_POPULAR_PARQUET  = PROCESSED_DIR / 'bairro_popular.parquet'
+CADASTRO_UNITS_PARQUET  = PROCESSED_DIR / 'cadastro_units.parquet'
+CADASTRO_LOTES_PARQUET  = PROCESSED_DIR / 'cadastro_lotes.parquet'
+
+# Parquets de camadas contextuais (gerados por process_context_layers.py)
+VIA_CLASSIFICA_PARQUET    = PROCESSED_DIR / 'via_classifica.parquet'
+DECLIVIDADE_PARQUET       = PROCESSED_DIR / 'declividade.parquet'
+ZONEAMENTO_PARQUET        = PROCESSED_DIR / 'zoneamento.parquet'
+ATIVIDADE_ECON_PARQUET    = PROCESSED_DIR / 'atividade_economica.parquet'
+SETOR_CENSITARIO_PARQUET  = PROCESSED_DIR / 'setor_censitario.parquet'
+VILA_FAVELA_PARQUET       = PROCESSED_DIR / 'vila_favela.parquet'
+
+# ── Master metrics ────────────────────────────────────────────────────────────
+# MASTER_METRICS_BASE: saída do ETL de matching (recalculate_gci.py) — métricas de endereço+coordenada
+# MASTER_METRICS:      saída final (enrich_master_metrics.py) — base + variáveis contextuais BHMap (~114 cols)
+MASTER_METRICS_BASE = PROCESSED_DIR / 'cnefe_master_metrics_base.parquet'
+MASTER_METRICS      = PROCESSED_DIR / 'cnefe_master_metrics.parquet'
 
 # Ensure directories exist
 for p in [RAW_DIR, PROCESSED_DIR, FIG_DIR, MAP_DIR, TAB_DIR]:
