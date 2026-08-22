@@ -27,6 +27,9 @@ env/
 .jupyter_cache/
 .pytest_cache/
 
+# Credenciais locais (copie de .env.example)
+.env
+
 # Arquivos locais e de configuração (IDE)
 .vscode/
 .idea/
@@ -45,3 +48,8 @@ CLAUDE.md
 
 #Dissertação
 docs/
+
+# Documentos de trabalho / mudanças arquiteturais (não versionar, não referenciar)
+scratch/
+PLANO_CORRECOES.md
+_survey.txt

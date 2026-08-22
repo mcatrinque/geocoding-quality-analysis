@@ -32,6 +32,16 @@ esda
 spreg
 kaleido==0.2.1
 ipywidgets
+
+# API de prova de conceito
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+geoalchemy2
+openlocationcode
+python-dotenv
+
 # Nota: a extensão espacial do DuckDB é instalada em runtime (não é pacote pip).
 # Execute no notebook: con.execute("INSTALL spatial; LOAD spatial;")
 # ou rode: python -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL spatial')"
