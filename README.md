@@ -1,5 +1,16 @@
 # Qualidade de geocodificação e repositório de endereços de referência
 
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![Jupyter](https://img.shields.io/badge/Jupyter-13%20notebooks-F37626?logo=jupyter&logoColor=white)
+![PostGIS](https://img.shields.io/badge/PostGIS-15--3.3-336791?logo=postgresql&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-prova%20de%20conceito-009688?logo=fastapi&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
+
+![Status](https://img.shields.io/badge/status-pesquisa%20em%20andamento-E8A33D)
+![PPGCC UFMG](https://img.shields.io/badge/PPGCC-UFMG-0F4C81)
+![Dados](https://img.shields.io/badge/dados-CNEFE%202022%20%C3%97%20BHMap-6A737D)
+[![Último commit](https://img.shields.io/github/last-commit/mcatrinque/geocoding-quality-analysis?label=%C3%BAltimo%20commit&color=4C7A34)](https://github.com/mcatrinque/geocoding-quality-analysis/commits/main)
+
 Avaliação da qualidade do CNEFE 2022 contra a base oficial de endereços de Belo Horizonte, e a estrutura que transforma esse resultado em um repositório de endereços consultável. Pesquisa de dissertação de mestrado em Ciência da Computação (PPGCC/DCC/UFMG).
 
 ## Visão geral
