@@ -1,0 +1,37 @@
+# Repositório de endereços de referência (PoC): PostGIS + API FastAPI.
+# As credenciais vêm do arquivo .env (copie de .env.example); o compose
+# falha com mensagem explícita se elas não estiverem definidas.
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: cnefe_postgis
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?defina no .env, copiando de .env.example}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env, copiando de .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:?defina no .env, copiando de .env.example}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./src/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  api:
+    image: python:3.12-slim
+    container_name: cnefe_api
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: >
+      sh -c "pip install --no-cache-dir fastapi uvicorn sqlalchemy psycopg2-binary geoalchemy2 openlocationcode python-dotenv
+      && uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  postgis_data:

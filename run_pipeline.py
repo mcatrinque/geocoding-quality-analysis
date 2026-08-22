@@ -31,31 +31,40 @@ from rich import box
 
 console = Console(highlight=False)
 
-BASE_DIR      = Path(__file__).resolve().parent
-VENV_DIR      = BASE_DIR / ".venv"
-VENV_PYTHON   = VENV_DIR / "Scripts" / "python.exe"
-REQUIREMENTS  = BASE_DIR / "requirements.txt"
+BASE_DIR = Path(__file__).resolve().parent
+VENV_DIR = BASE_DIR / ".venv"
+VENV_PYTHON = VENV_DIR / "Scripts" / "python.exe"
+REQUIREMENTS = BASE_DIR / "requirements.txt"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
 # Pipeline sequence: each tuple is (type, target)
 # type "NB"  → run notebook by stem name (auto-resolved in notebooks/)
 # type "ETL" → run ETL script by relative path
 PIPELINE_STEPS = [
-    ("NB",  "01_ingestao"),
-    ("NB",  "02_matching"),
+    ("NB", "01_ingestao"),
+    ("NB", "02_matching"),
     ("ETL", "scripts/process_context_layers.py"),
-    ("NB",  "03_eda_bases"),               # computa CDI/CCR/DRS → cnefe_coordinate_metrics.parquet
-    ("NB",  "04_metricas_qualidade"),
-    ("NB",  "05_acuracia_gci"),             # computa LCI/PCI/GCI → cnefe_master_metrics_base.parquet
-    ("ETL", "scripts/enrich_master_metrics.py"),  # join contextual → cnefe_master_metrics.parquet
-    ("NB",  "06_analise_descritiva"),      # lê cnefe_master_metrics.parquet (precisa do ETL acima)
-    ("NB",  "07_consolidacao_edificios"),   # consolida edifícios → cnefe_edificios.parquet
-    ("NB",  "08_comparacao_gci"),
-    ("NB",  "09_segmentacao_tipologica"),
-    ("NB",  "10_segmentacao_uso"),
-    ("NB",  "11_analise_socioespacial"),
-    ("NB",  "12_causalidade"),
-    ("NB",  "13_sintese_final"),
+    ("NB", "03_eda_bases"),  # computa CDI/CCR/DRS → cnefe_coordinate_metrics.parquet
+    ("NB", "04_lci_completude"),
+    (
+        "NB",
+        "05_acuracia_gci",
+    ),  # computa LCI/PCI/GCI → cnefe_master_metrics_base.parquet
+    (
+        "ETL",
+        "scripts/enrich_master_metrics.py",
+    ),  # join contextual → cnefe_master_metrics.parquet
+    (
+        "NB",
+        "06_consolidacao_edificios",
+    ),  # consolida edifícios → cnefe_edificios.parquet
+    ("NB", "07_validacao_gci"),  # validação formal GCI_empirico
+    ("NB", "08_eda_contextual"),  # screening de covariáveis → prepara NB09-12
+    ("NB", "09_segmentacao_tipologica"),
+    ("NB", "10_segmentacao_uso"),
+    ("NB", "11_analise_socioespacial"),
+    ("NB", "12_determinantes_gci"),
+    ("NB", "13_sintese_final"),
 ]
 
 _NOISE = (
@@ -90,6 +99,7 @@ def _fmt_time(seconds: float) -> str:
 
 # ── Ambiente ──────────────────────────────────────────────────────────────────
 
+
 def _install_deps():
     console.print("[dim]  Instalando dependências...[/dim]")
     subprocess.run(
@@ -98,15 +108,17 @@ def _install_deps():
     )
     subprocess.run(
         [str(VENV_PYTHON), "-m", "pip", "install", "-r", str(REQUIREMENTS)],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     # geobr 0.2.x pins shapely<=2.1.0, but only shapely 2.1.2 has cp314 wheels;
     # the two are API-compatible so --no-deps is safe here
     subprocess.run(
         [str(VENV_PYTHON), "-m", "pip", "install", "--no-deps", "geobr"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
-    console.print("[green]  ✓[/green] Dependências prontas.")
+    console.print("[green]OK[/green] Dependencias prontas.")
 
 
 def reset_env():
@@ -117,16 +129,35 @@ def reset_env():
             capture_output=True,
         )
         if result.returncode != 0 or VENV_DIR.exists():
-            console.print("[yellow]  ! .venv em uso (VS Code) — reinstalando pacotes no ambiente existente.[/yellow]")
-            _install_deps()
-            return
-    console.print("[dim]  Criando ambiente virtual...[/dim]")
-    if subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)]).returncode != 0:
-        abort("Falha ao criar o ambiente virtual.")
+            console.print(
+                "[yellow]  ! .venv em uso (VS Code) — recuperando ambiente virtual existente...[/yellow]"
+            )
+            if VENV_PYTHON.exists():
+                try:
+                    bak_path = VENV_PYTHON.with_name("python.exe.bak")
+                    if bak_path.exists():
+                        try:
+                            bak_path.unlink()
+                        except Exception:
+                            pass
+                    VENV_PYTHON.rename(bak_path)
+                except Exception:
+                    pass
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(VENV_DIR)], capture_output=True
+            )
+    else:
+        console.print("[dim]  Criando ambiente virtual...[/dim]")
+        if (
+            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)]).returncode
+            != 0
+        ):
+            abort("Falha ao criar o ambiente virtual.")
     _install_deps()
 
 
 # ── Limpeza ───────────────────────────────────────────────────────────────────
+
 
 def clean_processed():
     import shutil
@@ -164,14 +195,13 @@ def clean_processed():
             pass
 
     parts = "  ".join(
-        f"[dim]{k}[/dim] [yellow]{v}[/yellow]"
-        for k, v in removed.items()
-        if v
+        f"[dim]{k}[/dim] [yellow]{v}[/yellow]" for k, v in removed.items() if v
     )
-    console.print(f"  [green]✓[/green] Limpeza  {parts}\n")
+    console.print(f"  [green]OK[/green] Limpeza  {parts}\n")
 
 
 # ── Execução de etapas ────────────────────────────────────────────────────────
+
 
 def run_script(path: str, python: str) -> tuple[bool, str]:
     return _run([python, str(BASE_DIR / path)])
@@ -204,6 +234,7 @@ with open(nb_path, "w", encoding="utf-8") as f:
 
 # ── Utilitários ───────────────────────────────────────────────────────────────
 
+
 def abort(msg: str):
     console.print(f"\n[bold red]  ERRO:[/bold red] {msg}")
     sys.exit(1)
@@ -211,8 +242,9 @@ def abort(msg: str):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
-    args     = sys.argv[1:]
+    args = sys.argv[1:]
     do_reset = "--reset-env" in args
     do_clean = "--clean" in args or do_reset
 
@@ -262,17 +294,22 @@ def main():
         steps = [s for i, s in enumerate(steps) if i >= 2]
     elif from_val in {"01", "02"}:
         prefix = from_val.zfill(2)
-        steps = [s for s in steps if not (s[0] == "NB" and Path(str(s[1])).stem < prefix)]
+        steps = [
+            s for s in steps if not (s[0] == "NB" and Path(str(s[1])).stem < prefix)
+        ]
 
     total = len(steps)
 
     # Validações rápidas
     if not run_ingestion:
-        for f in [PROCESSED_DIR / "cnefe_bh.parquet", PROCESSED_DIR / "bhmap_bh.parquet"]:
+        for f in [
+            PROCESSED_DIR / "cnefe_bh.parquet",
+            PROCESSED_DIR / "bhmap_bh.parquet",
+        ]:
             if not f.exists():
                 abort(f"{f.name} não encontrado. Execute a partir de NB01: --from nb01")
 
-    console.rule(f"[bold]Pipeline  ·  {total} etapas")
+    console.rule(f"[bold]Pipeline  -  {total} etapas")
     console.print()
 
     timings: list[tuple[str, str, float]] = []
@@ -280,8 +317,8 @@ def main():
 
     for idx, (stype, target) in enumerate(steps, 1):
         label = target.name if isinstance(target, Path) else Path(target).name
-        tag   = "NB" if stype == "NB" else "ETL"
-        desc  = f"[dim][{idx}/{total}][/dim]  {label}"
+        tag = "NB" if stype == "NB" else "ETL"
+        desc = f"[dim][{idx}/{total}][/dim]  {label}"
 
         t0 = time.perf_counter()
 
@@ -295,8 +332,8 @@ def main():
         timings.append((tag, label, elapsed))
 
         tag_color = "cyan" if stype == "NB" else "yellow"
-        icon      = "[green]✓[/green]" if ok else "[red]✗[/red]"
-        num       = f"[dim][{idx}/{total}][/dim]"
+        icon = "[green]OK[/green]" if ok else "[red]X[/red]"
+        num = f"[dim][{idx}/{total}][/dim]"
 
         console.print(
             f"  {icon}  {num}  [{tag_color}]{tag}[/{tag_color}]  "
@@ -306,7 +343,14 @@ def main():
         if not ok:
             if output:
                 snippet = output[-4000:] if len(output) > 4000 else output
-                console.print(Panel(snippet, title="[red]Saída de erro", border_style="red", padding=(0, 1)))
+                console.print(
+                    Panel(
+                        snippet,
+                        title="[red]Saída de erro",
+                        border_style="red",
+                        padding=(0, 1),
+                    )
+                )
             stem = target.stem[:4] if isinstance(target, Path) else "etl"
             abort(f"Falha em {label}. Corrija e retome com --from {stem}")
 
@@ -315,10 +359,12 @@ def main():
     console.print()
     console.rule("[bold green]Pipeline concluído")
 
-    tbl = Table(box=box.SIMPLE, show_header=True, header_style="bold dim", pad_edge=False)
+    tbl = Table(
+        box=box.SIMPLE, show_header=True, header_style="bold dim", pad_edge=False
+    )
     tbl.add_column("Etapa", style="default", no_wrap=True)
-    tbl.add_column("Tipo",  style="dim",     no_wrap=True)
-    tbl.add_column("Tempo", style="dim",     justify="right", no_wrap=True)
+    tbl.add_column("Tipo", style="dim", no_wrap=True)
+    tbl.add_column("Tempo", style="dim", justify="right", no_wrap=True)
 
     for tag, lbl, dur in timings:
         color = "cyan" if tag == "NB" else "yellow"
