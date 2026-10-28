@@ -1,4 +1,4 @@
-# Repositório de endereços de referência (PoC): PostGIS + API FastAPI.
+# Repositório de endereços de referência: PostGIS e API.
 # As credenciais vêm do arquivo .env (copie de .env.example); o compose
 # falha com mensagem explícita se elas não estiverem definidas.
 services:
@@ -14,23 +14,30 @@ services:
     volumes:
       - postgis_data:/var/lib/postgresql/data
       - ./src/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   api:
-    image: python:3.12-slim
+    build: .
     container_name: cnefe_api
-    working_dir: /app
-    volumes:
-      - .:/app
-    command: >
-      sh -c "pip install --no-cache-dir fastapi uvicorn sqlalchemy psycopg2-binary geoalchemy2 openlocationcode python-dotenv
-      && uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Sem API_KEYS o acesso é aberto, que é o padrão da prova de conceito.
+      # Formato: "chave1:cliente1,chave2:cliente2"
+      API_KEYS: ${API_KEYS:-}
+      # Zero desliga o limite de requisições por minuto por cliente
+      LIMITE_POR_MINUTO: ${LIMITE_POR_MINUTO:-0}
+      LIMIAR_SIMILARIDADE: ${LIMIAR_SIMILARIDADE:-0.30}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
     ports:
       - "8000:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

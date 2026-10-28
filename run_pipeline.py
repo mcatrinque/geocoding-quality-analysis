@@ -6,19 +6,22 @@ Uso:
   python run_pipeline.py --clean       # apaga dados processados e roda tudo
   python run_pipeline.py --reset-env   # recria o venv, limpa dados e roda tudo
   python run_pipeline.py --from nb05    # retoma a partir do NB05
+  python run_pipeline.py --from etl --dry-run  # mostra o plano sem executar
 
 Ordem de execução:
-  NB01 → NB02 → ETL scripts → NB03 → ... → NB13
+  NB01 → NB02 → ETL scripts → NB03 → ... → NB12 → NB15 → NB16 → NB18 → NB22
 
   --from nb01/nb02 : reinicia ingestão/matching + ETL + análise
-  --from etl       : re-executa só os scripts ETL + análise (NB03-13)
+  --from etl       : re-executa só os scripts ETL + análise (NB03 em diante)
   --from nb03+     : pula ingestão e ETL, começa na análise
+  --com-api        : inclui o NB14 e o NB17, que exigem a API no ar
 
 Nota: NB01 lê o CNEFE de um JSON de 4.6 GB — pode levar 20–30 min na
 primeira execução. Execuções subsequentes (--from nb02 em diante) são
 rápidas por lerem diretamente de Parquet.
 """
 
+import argparse
 import subprocess
 import sys
 import time
@@ -41,9 +44,13 @@ PROCESSED_DIR = BASE_DIR / "data" / "processed"
 # type "NB"  → run notebook by stem name (auto-resolved in notebooks/)
 # type "ETL" → run ETL script by relative path
 PIPELINE_STEPS = [
+    # As camadas de contexto vem primeiro: o NB02 consome vila_favela.parquet ao
+    # estratificar o pareamento, e o ETL que o produz nao depende de notebook
+    # algum, apenas dos shapefiles brutos. Com a ordem anterior o pipeline nao
+    # rodava do zero, so' sobre uma pasta data/processed ja' povoada.
+    ("ETL", "scripts/process_context_layers.py"),
     ("NB", "01_ingestao"),
     ("NB", "02_matching"),
-    ("ETL", "scripts/process_context_layers.py"),
     ("NB", "03_eda_bases"),  # computa CDI/CCR/DRS → cnefe_coordinate_metrics.parquet
     ("NB", "04_lci_completude"),
     (
@@ -64,8 +71,22 @@ PIPELINE_STEPS = [
     ("NB", "10_segmentacao_uso"),
     ("NB", "11_analise_socioespacial"),
     ("NB", "12_determinantes_gci"),
-    ("NB", "13_sintese_final"),
+    ("NB", "15_conjuntos_estratos"),  # conjuntos de chaves, estratos e vetores de deslocamento
+    ("NB", "16_adjudicacao_cadastral"),  # evidência cadastral da cauda e das ausências
+    ("NB", "18_restricao_territorial"),  # concordância de bairro e CEP e restrição territorial
+    ("NB", "22_conjuntos_exclusivos"),  # composição das chaves sem par
+    ("NB", "23_referencia_municipal_completa"),  # pareamento com todos os pontos do BHMap → cnefe_identidade_completa.parquet
+    ("NB", "24_composicao_bases"),  # representação de endereços e estratos nas duas bases
+    ("NB", "25_setor_censitario"),  # setor censitário dos pares, restrição por setor e Moran
+    ("NB", "26_verificacoes_robustez"),  # candidato mais próximo, borda de setor e de vilas, sensibilidade do Moran
 ]
+
+# NB14 e NB17 exercitam a API ao vivo e dependem dos servicos no ar
+# (docker compose up -d --build + scripts/load_cnefe_to_postgis.py).
+# Ficam fora da sequencia padrao para que o pipeline analitico nao dependa
+# de infraestrutura externa. Rode-os com --com-api.
+PASSO_API = ("NB", "14_api_poc")
+PASSO_API_TESTE = ("NB", "17_teste_operacional_independente")
 
 _NOISE = (
     "resource_tracker.py",
@@ -220,7 +241,11 @@ from pathlib import Path
 nb_path = Path({repr(str(nb))})
 with open(nb_path, encoding="utf-8") as f:
     nb_node = nbformat.read(f, as_version=4)
-client = NotebookClient(nb_node, timeout=3600)
+# O kernel roda com o cwd em notebooks/, que e' onde o Jupyter coloca o
+# usuario. Sem isto, caminho relativo escrito na mao funciona na edicao
+# interativa e quebra no pipeline.
+client = NotebookClient(nb_node, timeout=3600,
+                        resources={{"metadata": {{"path": str(nb_path.parent)}}}})
 client.reset_execution_trackers()
 with client.setup_kernel():
     for i, cell in enumerate(nb_node.cells):
@@ -240,19 +265,70 @@ def abort(msg: str):
     sys.exit(1)
 
 
+def planejar_etapas(inicio: str | None = None, com_api: bool = False) -> list[tuple[str, str]]:
+    """Seleciona etapas pelo nome, sem depender da posição na lista."""
+    passos = list(PIPELINE_STEPS)
+    if com_api:
+        passos.extend([PASSO_API, PASSO_API_TESTE])
+    if inicio is None or inicio == "01":
+        return passos
+
+    contextual = ("ETL", "scripts/process_context_layers.py")
+    if inicio == "etl":
+        nome_inicial = "03_eda_bases"
+    elif inicio == "02":
+        nome_inicial = "02_matching"
+    else:
+        if inicio in {"14", "17"} and not com_api:
+            raise ValueError(f"O NB{inicio} exige --com-api. Use: --from nb{inicio} --com-api")
+        candidatos = [target for tipo, target in passos if tipo == "NB" and target.startswith(f"{inicio}_")]
+        if len(candidatos) != 1:
+            raise ValueError(f"Nenhum notebook encontrado para --from nb{inicio}")
+        nome_inicial = candidatos[0]
+
+    selecionados: list[tuple[str, str]] = []
+    encontrou = False
+    for etapa in passos:
+        if etapa == ("NB", nome_inicial):
+            encontrou = True
+        if encontrou:
+            selecionados.append(etapa)
+    if not encontrou:
+        raise ValueError(f"Etapa inicial não encontrada: {nome_inicial}")
+    if inicio in {"02", "etl"}:
+        if contextual not in passos:
+            raise ValueError("O ETL contextual necessário não está no pipeline")
+        selecionados.insert(0, contextual)
+    return selecionados
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
 def main():
-    args = sys.argv[1:]
-    do_reset = "--reset-env" in args
-    do_clean = "--clean" in args or do_reset
+    parser = argparse.ArgumentParser(description="Executa ou mostra o plano do pipeline")
+    parser.add_argument("--from", dest="inicio", metavar="ETAPA")
+    parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--reset-env", action="store_true")
+    parser.add_argument("--com-api", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="mostra as etapas sem executá-las")
+    args = parser.parse_args()
+    from_val = args.inicio.lower().removeprefix("nb") if args.inicio else None
+    if from_val and from_val != "etl":
+        from_val = from_val.zfill(2)
+    try:
+        passos = planejar_etapas(from_val, args.com_api)
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    from_val = None
-    if "--from" in args:
-        i = args.index("--from")
-        if i + 1 < len(args):
-            from_val = args[i + 1].lower().removeprefix("nb")
+    if args.dry_run:
+        console.print(f"Plano de execução: {len(passos)} etapas")
+        for ordem, (tipo, destino) in enumerate(passos, 1):
+            console.print(f"{ordem:2d}. {tipo} {destino}")
+        return
+
+    do_reset = args.reset_env
+    do_clean = args.clean or do_reset
 
     if do_reset:
         console.rule("[bold]Ambiente")
@@ -267,36 +343,14 @@ def main():
 
     run_ingestion = from_val is None or from_val in {"01", "02"}
 
-    # Resolve steps from PIPELINE_STEPS
     nb_dir = BASE_DIR / "notebooks"
     steps: list[tuple[str, Path | str]] = []
-    for stype, target in PIPELINE_STEPS:
+    for stype, target in passos:
         if stype == "NB":
             nb_path = nb_dir / f"{target}.ipynb"
             steps.append(("NB", nb_path))
         else:
             steps.append(("ETL", target))
-
-    # Apply --from filter
-    if from_val and from_val not in {"01", "02", "etl"}:
-        prefix = from_val.zfill(2)
-        # Find first step whose NB stem starts with prefix, or first ETL after that
-        cut = None
-        for i, (stype, target) in enumerate(steps):
-            if stype == "NB" and Path(target).stem >= prefix:
-                cut = i
-                break
-        if cut is None:
-            abort(f"Nenhum notebook encontrado a partir de '{from_val}'.")
-        steps = steps[cut:]
-    elif from_val == "etl":
-        # Skip NB01/NB02, start from process_context_layers
-        steps = [s for i, s in enumerate(steps) if i >= 2]
-    elif from_val in {"01", "02"}:
-        prefix = from_val.zfill(2)
-        steps = [
-            s for s in steps if not (s[0] == "NB" and Path(str(s[1])).stem < prefix)
-        ]
 
     total = len(steps)
 
@@ -351,8 +405,13 @@ def main():
                         padding=(0, 1),
                     )
                 )
-            stem = target.stem[:4] if isinstance(target, Path) else "etl"
-            abort(f"Falha em {label}. Corrija e retome com --from {stem}")
+            if isinstance(target, Path):
+                retomada = f"--from nb{target.stem[:2]}"
+                if (stype, target.stem) in {PASSO_API, PASSO_API_TESTE}:
+                    retomada += " --com-api"
+            else:
+                retomada = "--from etl"
+            abort(f"Falha em {label}. Corrija e retome com {retomada}")
 
     # ── Resumo ─────────────────────────────────────────────────────────────────
     wall = time.perf_counter() - wall_start

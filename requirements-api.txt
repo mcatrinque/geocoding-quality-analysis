@@ -1,0 +1,12 @@
+# Dependências do serviço, separadas das da análise.
+# A imagem da API não precisa de geopandas, notebooks nem bibliotecas de
+# estatística; manter o conjunto pequeno reduz o tamanho e a superfície de
+# atualização do container. As versões são fixadas para que a imagem seja
+# reproduzível.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+openlocationcode==1.0.1
+python-dotenv==1.0.1
+pydantic==2.10.4

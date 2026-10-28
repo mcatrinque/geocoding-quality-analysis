@@ -1,0 +1,9 @@
+codigo_municipio,nivel,confianca,base,n,erro_mediano_m,erro_ce90_m,acima_30_pct,acima_100_pct
+3106200,logradouro,baixa,nivel+confianca,1004.0,287.73,12736.67,85.76,67.33
+3106200,numero_aproximado,moderada,nivel+confianca,2529.0,24.39,2229.93,44.68,24.48
+3106200,numero_exato,alta,nivel+confianca,16217.0,8.2,20.98,5.77,1.83
+3106200,numero_exato,moderada,nivel+confianca,174.0,12.15,29.47,8.62,0.0
+3106200,logradouro,,nivel,1004.0,287.73,12736.67,85.76,67.33
+3106200,numero_aproximado,,nivel,2529.0,24.39,2229.93,44.68,24.48
+3106200,numero_exato,,nivel,16391.0,8.23,21.1,5.8,1.81
+3106200,,,global,19924.0,9.38,57.94,14.76,7.99

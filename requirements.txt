@@ -33,7 +33,8 @@ spreg
 kaleido==0.2.1
 ipywidgets
 
-# API de prova de conceito
+# API de prova de conceito. As versoes fixadas da imagem do servico ficam em
+# requirements-api.txt; aqui sao as dependencias do ambiente de analise.
 fastapi
 uvicorn
 sqlalchemy
@@ -41,6 +42,10 @@ psycopg2-binary
 geoalchemy2
 openlocationcode
 python-dotenv
+
+# Testes
+pytest
+httpx
 
 # Nota: a extensão espacial do DuckDB é instalada em runtime (não é pacote pip).
 # Execute no notebook: con.execute("INSTALL spatial; LOAD spatial;")

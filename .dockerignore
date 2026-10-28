@@ -1,0 +1,13 @@
+# O contexto de build da imagem da API precisa apenas de src/ e do arquivo de
+# dependências. Sem esta lista, o Docker envia ao daemon os gigabytes de dados
+# brutos e processados a cada build.
+**
+!Dockerfile
+!.dockerignore
+!requirements-api.txt
+!src/
+!src/**
+!dados_replicacao/
+!dados_replicacao/calibracao_bh.csv
+src/**/__pycache__/
+src/**/*.pyc

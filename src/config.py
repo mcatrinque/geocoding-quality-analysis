@@ -1,9 +1,14 @@
 from pathlib import Path
+import os
 
 # ============================================================
 # config.py — Configuração Central do Projeto
 # Geocoding Quality Analysis: CNEFE 2022 vs BHMap (Gold Standard)
 # ============================================================
+
+# Semente unica do projeto. Vale para amostragem, modelos e para as
+# permutacoes de Moran/LISA, cujo p depende de sorteio.
+SEED = 42
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -11,7 +16,7 @@ DATA_DIR = BASE_DIR / 'data'
 RAW_DIR = DATA_DIR / 'raw'
 PROCESSED_DIR = DATA_DIR / 'processed'
 
-OUTPUT_DIR = BASE_DIR / 'outputs'
+OUTPUT_DIR = Path(os.environ.get('GEOCODING_OUTPUT_DIR', BASE_DIR / 'outputs'))
 FIG_DIR = OUTPUT_DIR / 'figures'
 MAP_DIR = OUTPUT_DIR / 'maps'
 TAB_DIR = OUTPUT_DIR / 'tables'
@@ -54,11 +59,18 @@ ATIVIDADE_ECON_PARQUET    = PROCESSED_DIR / 'atividade_economica.parquet'
 SETOR_CENSITARIO_PARQUET  = PROCESSED_DIR / 'setor_censitario.parquet'
 VILA_FAVELA_PARQUET       = PROCESSED_DIR / 'vila_favela.parquet'
 
+# Malha preliminar de setores do Censo 2022 (IBGE), a que o COD_SETOR do CNEFE usa.
+# A camada SETOR_CENSITARIO_2022 da prefeitura segue a malha final, com outra codificação.
+# Fonte: geoftp.ibge.gov.br/organizacao_do_territorio/malhas_territoriais/
+#        malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022_preliminar/setores/gpkg/UF/MG/
+SETOR_PRELIMINAR_GPKG     = RAW_DIR / 'ibge_setores_2022_preliminar' / 'MG_Malha_Preliminar_2022.gpkg'
+COD_MUNICIPIO_BH          = '3106200'
+
 # ── Master metrics ────────────────────────────────────────────────────────────
 # MASTER_METRICS_BASE: saída do ETL de matching (recalculate_gci.py) — métricas de endereço+coordenada
 # MASTER_METRICS:      saída final (enrich_master_metrics.py) — base + variáveis contextuais BHMap (~114 cols)
 MASTER_METRICS_BASE = PROCESSED_DIR / 'cnefe_master_metrics_base.parquet'
-MASTER_METRICS      = PROCESSED_DIR / 'cnefe_master_metrics.parquet'
+MASTER_METRICS      = Path(os.environ.get('GEOCODING_MASTER_PATH', PROCESSED_DIR / 'cnefe_master_metrics.parquet'))
 
 # Ensure directories exist
 for p in [RAW_DIR, PROCESSED_DIR, FIG_DIR, MAP_DIR, TAB_DIR]:
@@ -99,14 +111,15 @@ TIPO_ESPECIE_MAP = {
 }
 
 NV_GEO_MAP = {
-    1: 'Medido em campo',
-    2: 'Estimado próximo',
-    3: 'Estimado distante',
-    4: 'Outro método',
-    6: 'Sem medição',
+    1: 'Coordenada original do Censo 2022',
+    2: 'Coordenada modificada (agrupamento de apartamentos)',
+    3: 'Coordenada estimada (original ausente ou inválida)',
+    4: 'Face de quadra',
+    5: 'Localidade',
+    6: 'Setor censitário',
 }
 
-# LCI weights based on NV_GEO_COORD (Davis & Fonseca, 2007 adaptation)
+# Pesos do baseline local, preservados para comparabilidade, sem calibração validada.
 LCI_WEIGHTS_BY_NV_GEO = {1: 1.0, 2: 0.8, 3: 0.5, 4: 0.3, 6: 0.1}
 
 # Completude: campos e pesos para cálculo de completude ISO 19157

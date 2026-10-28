@@ -26,9 +26,21 @@ env/
 .ipynb_checkpoints/
 .jupyter_cache/
 .pytest_cache/
+.pytest-tmp-api-reparos*/
 
 # Credenciais locais (copie de .env.example)
 .env
+
+# Instruções e memória de agentes de IA (locais, não fazem parte do produto)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md
 
 # Arquivos locais e de configuração (IDE)
 .vscode/
@@ -44,7 +56,29 @@ desktop.ini
 #Dissertação
 docs/
 
+# Artigo e código de apoio (figuras e números do artigo, conferências, preparo de
+# validação). Os notebooks reproduzem as análises, e o apoio só lê as saídas deles.
+paper/
+apoio/
+
+# Texto acadêmico fora das pastas acima também não sobe
+*.tex
+*.bib
+*.docx
+
+# Estado da conferência entre análises e texto, lido só pelo apoio
+dados_replicacao/estado_validacao.json
+
 # Documentos de trabalho / mudanças arquiteturais (não versionar, não referenciar)
 scratch/
 PLANO_CORRECOES.md
 _survey.txt
+
+# Artefatos intermediários dos notebooks: regeneráveis pelo pipeline, derivados
+# do BHMap, e pickle é formato que executa código ao ser lido. Não vai para um
+# repositório público.
+*.pkl
+notebooks/*.pkl
+
+# Saída compilada (regenerável a partir do fonte)
+*.pdf

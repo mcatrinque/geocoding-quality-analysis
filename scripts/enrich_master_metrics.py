@@ -18,7 +18,7 @@ Joins realizados (por cobertura esperada decrescente):
   7.  DECLIVIDADE  (~13k trechos)     → ~80%  → DECLIV_MEDIANA, DECLIV_DESVPAD, DECLIV_CLASSE
   8.  ZONEAMENTO   (~1.7k polígonos)  → ~30%  → ZONA_TIPO, ZONA_CLASSE, FLAG_ZONA_SOCIAL
   9.  ATIVIDADE_ECON (pontos CNPJ)    → setor → DENS_ATIV_ECON_KM2
-                                      → COD_ESPECIE 6/7 → FLAG_ESTAB_VALIDADO, DIST_ATIV_MIN
+                                      → espécies 3,4,5,6,8 → FLAG_ATIV_PROXIMA_50M, DIST_ATIV_MIN
   10. SETOR_CENSITARIO (~5k setores)  → ~98%  → POP_SETOR, DOM_SETOR, DENS_DOM_KM2
   11. VILA_FAVELA  (218 polígonos)    → ~5%   → em_favela, TIPO_ASSENTAMENTO,
                                                TEM_PLANO_URBANO, PLANO_URBANO_ORD
@@ -36,11 +36,13 @@ Variáveis derivadas:
   - ALTITUDE_CLASSE     : faixas de altitude (baixa/media/alta/muito_alta)
 """
 
-import sys, warnings
+import argparse
+import hashlib
+import json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
@@ -53,6 +55,9 @@ console = Console()
 CRS  = config.TARGET_CRS
 OUT  = config.PROCESSED_DIR
 PROC = config.PROCESSED_DIR
+AUDITORIA_JUNCOES = []
+ETAPA_ATUAL = "junção"
+ESPECIES_ESTABELECIMENTO = [3, 4, 5, 6, 8]
 
 TIPOLOGIA_CLASSE_MAP = {
     "RESIDENCIAL UNIFAMILIAR":    "RESIDENCIAL",
@@ -76,14 +81,44 @@ ALTITUDE_BINS   = [0, 800, 900, 1000, 5000]
 ALTITUDE_LABELS = ["baixa", "media", "alta", "muito_alta"]
 
 
+def _reduzir_candidatos(joined, colunas):
+    """Preserva atributos consensuais. Não escolhe um objeto em caso de empate."""
+    reduzido = joined.loc[~joined.index.duplicated(keep="first")].copy()
+    grupos = joined.groupby(level=0, sort=False)
+    contagem = grupos['index_right'].count()
+    reduzido['_n_candidatos'] = contagem.reindex(reduzido.index).astype('int32')
+    conflitos = {}
+    for coluna in colunas:
+        # Ausente e preenchido também discordam: não completar escolhendo uma fonte.
+        distintos = grupos[coluna].nunique(dropna=False)
+        ambiguos = distintos.gt(1).reindex(reduzido.index)
+        conflitos[coluna] = int(ambiguos.sum())
+        reduzido[coluna] = reduzido[coluna].where(~ambiguos)
+    reduzido['index_right'] = reduzido['index_right'].where(reduzido['_n_candidatos'].eq(1))
+    AUDITORIA_JUNCOES.append({'etapa': ETAPA_ATUAL, 'registros': len(reduzido),
+        'sem_candidato': int(contagem.eq(0).sum()),
+        'multiplos_candidatos': int(contagem.gt(1).sum()), 'conflitos_por_atributo': conflitos})
+    return reduzido
+
+
 def _sjoin_dedup(left, right, how="left", predicate="within"):
+    if not left.index.is_unique:
+        raise ValueError('A chave de associação contextual deve ser única')
     joined = gpd.sjoin(left, right, how=how, predicate=predicate)
-    return joined[~joined.index.duplicated(keep="first")]
+    colunas = [c for c in right.columns if c != right.geometry.name]
+    reduzido = _reduzir_candidatos(joined, colunas)
+    if how == 'left':
+        reduzido = reduzido.reindex(left.index)
+        assert len(reduzido) == len(left)
+    return reduzido
 
 
-def load_base():
+def load_base(path=None):
     print("[BASE] Carregando cnefe_master_metrics_base.parquet ...")
-    gdf = gpd.read_parquet(PROC / "cnefe_master_metrics_base.parquet")
+    gdf = gpd.read_parquet(path or PROC / "cnefe_master_metrics_base.parquet")
+    if gdf['idx_cnefe_original'].isna().any() or gdf['idx_cnefe_original'].duplicated().any():
+        raise ValueError('Origem nula ou repetida no mestre-base')
+    gdf = gdf.reset_index(drop=True)
     if gdf.crs is None or gdf.crs.to_epsg() != 31983:
         gdf = gdf.to_crs(CRS)
     print(f"  {len(gdf):,} registros  {len(gdf.columns)} colunas  CRS={gdf.crs.to_epsg()}")
@@ -112,11 +147,13 @@ def join_ivs(gdf):
 def join_area_risco(gdf):
     print("[2/12] AREA_RISCO ...")
     risco = gpd.read_parquet(PROC / "area_risco.parquet").to_crs(CRS)
+    for nome, tipo in [('em_inundacao', 'INUNDACAO'), ('em_escorregamento', 'ESCORREGAMENTO')]:
+        parte = risco.loc[risco['TIPO_RISCO'].eq(tipo)]
+        presenca = _sjoin_dedup(gdf[['geometry']], parte[['geometry']], predicate='within')
+        gdf[nome] = presenca['_n_candidatos'].gt(0).astype('int8')
     joined = _sjoin_dedup(gdf[["geometry"]], risco[["TIPO_RISCO", "geometry"]], predicate="within")
     gdf["TIPO_RISCO"]        = joined["TIPO_RISCO"]
-    gdf["em_risco"]          = gdf["TIPO_RISCO"].notna().astype("int8")
-    gdf["em_inundacao"]      = (gdf["TIPO_RISCO"] == "INUNDACAO").astype("int8")
-    gdf["em_escorregamento"] = (gdf["TIPO_RISCO"] == "ESCORREGAMENTO").astype("int8")
+    gdf["em_risco"]          = joined['_n_candidatos'].gt(0).astype('int8')
     pct = gdf["em_risco"].mean() * 100
     print(f"  em_risco: {pct:.1f}%  "
           f"(inundação={gdf['em_inundacao'].sum():,}  escorr.={gdf['em_escorregamento'].sum():,})")
@@ -201,7 +238,8 @@ def join_edificacao(gdf):
         gdf[["geometry"]], edif_ctr[keep_cols],
         how="left", max_distance=30.0, distance_col="_edif_dist",
     )
-    joined = joined[~joined.index.duplicated(keep="first")]
+    joined = _reduzir_candidatos(joined, [c for c in keep_cols if c != 'geometry'])
+    gdf['DIST_EDIFICACAO_CENTROIDE_M'] = joined['_edif_dist']
 
     for col in [c for c in keep_cols if c != "geometry"]:
         if col in joined.columns:
@@ -233,7 +271,8 @@ def join_via_classifica(gdf):
         gdf[["geometry"]], via[keep_cols],
         how="left", max_distance=150.0, distance_col="_via_dist",
     )
-    joined = joined[~joined.index.duplicated(keep="first")]
+    joined = _reduzir_candidatos(joined, [c for c in keep_cols if c != 'geometry'])
+    gdf['DIST_VIA_CONTEXTO_M'] = joined['_via_dist']
 
     for col in [c for c in keep_cols if c != "geometry"]:
         if col in joined.columns:
@@ -263,7 +302,8 @@ def join_declividade(gdf):
         gdf[["geometry"]], dec[keep_cols],
         how="left", max_distance=200.0, distance_col="_dec_dist",
     )
-    joined = joined[~joined.index.duplicated(keep="first")]
+    joined = _reduzir_candidatos(joined, [c for c in keep_cols if c != 'geometry'])
+    gdf['DIST_DECLIVIDADE_TRECHO_M'] = joined['_dec_dist']
 
     for col in [c for c in keep_cols if c != "geometry"]:
         if col in joined.columns:
@@ -302,7 +342,7 @@ def join_zoneamento(gdf):
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. ATIVIDADE_ECONOMICA
 #    9a: densidade por setor censitário (todos os registros)
-#    9b: validação de estabelecimentos (COD_ESPECIE ∈ {6,7})
+#    9b: proximidade de atividade, sem validação de identidade
 # ─────────────────────────────────────────────────────────────────────────────
 def join_atividade_economica(gdf):
     print("[9/12] ATIVIDADE_ECONOMICA ...")
@@ -320,7 +360,7 @@ def join_atividade_economica(gdf):
     if sec_path.exists() and "COD_SETOR" in gdf.columns:
         sec = gpd.read_parquet(sec_path).to_crs(CRS)
         # Contar estabelecimentos por setor via sjoin
-        atv_idx = gpd.sjoin(
+        atv_idx = _sjoin_dedup(
             atv[["geometry"]],
             sec[["COD_SETOR", "AREA_KM2_SETOR", "geometry"]],
             how="left", predicate="within",
@@ -328,35 +368,39 @@ def join_atividade_economica(gdf):
 
         setor_count = atv_idx.groupby("COD_SETOR").size().rename("N_ATIV_ECON")
         setor_area  = sec.set_index("COD_SETOR")["AREA_KM2_SETOR"]
-        setor_dens  = (setor_count / setor_area).rename("DENS_ATIV_ECON_KM2")
+        if not setor_area.index.is_unique:
+            raise ValueError('Código de setor repetido na camada de densidade')
+        setor_dens  = (setor_count.reindex(setor_area.index, fill_value=0) / setor_area.where(setor_area.gt(0))).rename("DENS_ATIV_ECON_KM2")
 
-        # Merge de volta ao gdf via COD_SETOR
-        cod_map = gdf["COD_SETOR"].map(setor_dens)
+        # A camada de densidade segue a malha final de setores, e o COD_SETOR do CNEFE
+        # segue a preliminar, com outra codificação. O setor vem da posição do ponto.
+        setor_local = _sjoin_dedup(gdf[["geometry"]], sec[["COD_SETOR", "geometry"]],
+                                   how="left", predicate="within")["COD_SETOR"]
+        cod_map = setor_local.reindex(gdf.index).map(setor_dens)
         gdf["DENS_ATIV_ECON_KM2"] = cod_map.astype("float32")
         pct = gdf["DENS_ATIV_ECON_KM2"].notna().mean() * 100
         print(f"  Cobertura DENS_ATIV_ECON_KM2: {pct:.1f}%  "
               f"(mediana {gdf['DENS_ATIV_ECON_KM2'].median():.0f} estab/km²)")
 
-    # 9b — Validação de estabelecimentos (COD_ESPECIE 6 e 7)
+    # Proximidade não comprova correspondência com o estabelecimento.
     if "COD_ESPECIE" in gdf.columns:
-        estab_mask = gdf["COD_ESPECIE"].isin([6, 7])
+        estab_mask = pd.to_numeric(gdf['COD_ESPECIE'], errors='coerce').isin(ESPECIES_ESTABELECIMENTO)
         gdf_estab  = gdf.loc[estab_mask, ["geometry"]].copy()
-        print(f"  Validando {estab_mask.sum():,} estabelecimentos CNEFE vs CNPJ BHMap ...")
+        print(f"  Buscando vizinhança para {estab_mask.sum():,} registros de estabelecimentos ...")
 
         near = gpd.sjoin_nearest(
             gdf_estab, atv[["geometry"]],
             how="left", max_distance=50.0, distance_col="_dist_atv",
         )
-        near = near[~near.index.duplicated(keep="first")]
+        near = _reduzir_candidatos(near, [])
 
-        gdf["FLAG_ESTAB_VALIDADO"] = np.int8(0)
+        gdf['FLAG_ATIV_PROXIMA_50M'] = pd.Series(pd.NA, index=gdf.index, dtype='Int8')
         gdf["DIST_ATIV_MIN_M"]     = np.nan
 
-        validated = near["_dist_atv"].notna()
-        gdf.loc[near[validated].index, "FLAG_ESTAB_VALIDADO"] = np.int8(1)
-        gdf.loc[near.index, "DIST_ATIV_MIN_M"] = near["_dist_atv"].values
+        gdf.loc[near.index, 'FLAG_ATIV_PROXIMA_50M'] = near['_dist_atv'].notna().astype('Int8')
+        gdf.loc[near.index, 'DIST_ATIV_MIN_M'] = near['_dist_atv']
 
-        n_val = int(gdf["FLAG_ESTAB_VALIDADO"].sum())
+        n_val = int(gdf['FLAG_ATIV_PROXIMA_50M'].sum())
         pct_v = n_val / estab_mask.sum() * 100 if estab_mask.sum() > 0 else 0
         print(f"  Estabelecimentos com CNPJ <=50m: {n_val:,} ({pct_v:.1f}%)")
 
@@ -398,7 +442,7 @@ def join_vila_favela_enriched(gdf):
         print("  Usando shapefile original como fallback ...")
         vf = gpd.read_file(config.VILAS_FAVELAS_SHP).to_crs(CRS)
         joined = _sjoin_dedup(gdf[["geometry"]], vf[["geometry"]], predicate="within")
-        gdf["em_favela"] = joined.index.isin(joined.dropna(how="all").index).astype("int8")
+        gdf['em_favela'] = joined['_n_candidatos'].gt(0).astype('int8')
         return gdf
 
     vf = gpd.read_parquet(vf_path).to_crs(CRS)
@@ -407,7 +451,7 @@ def join_vila_favela_enriched(gdf):
     keep_cols = [c for c in want if c in vf.columns]
     joined = _sjoin_dedup(gdf[["geometry"]], vf[keep_cols], predicate="within")
 
-    gdf["em_favela"] = joined["TIPO_ASSENTAMENTO"].notna().astype("int8")
+    gdf['em_favela'] = joined['_n_candidatos'].gt(0).astype('int8')
     for col in [c for c in keep_cols if c not in ("geometry",)]:
         if col in joined.columns:
             gdf[col] = joined[col]
@@ -446,7 +490,7 @@ def add_internal_flags(gdf):
 
     # Estabelecimento não-residencial
     if "COD_ESPECIE" in gdf.columns:
-        gdf["FLAG_ESTABELECIMENTO"] = gdf["COD_ESPECIE"].isin([6, 7]).astype("int8")
+        gdf['FLAG_ESTABELECIMENTO'] = pd.to_numeric(gdf['COD_ESPECIE'], errors='coerce').isin(ESPECIES_ESTABELECIMENTO).astype('int8')
 
     # Tipo de via do BHMap (já está em SIGLA_TIPO desde v2)
     # Sem duplicação — apenas garantir que o campo existe com nome claro
@@ -477,19 +521,20 @@ def add_derived(gdf):
         gdf["IVS_NORM"] = ((gdf["IVS_SCORE"] - 1) / 3.0).astype("float32")
 
     if "PAV_EST" in gdf.columns:
-        gdf["PAV_LOG"] = np.log1p(gdf["PAV_EST"].fillna(1)).astype("float32")
+        gdf['PAV_LOG'] = np.log1p(gdf['PAV_EST']).astype('float32')
 
     # ── Compostos ────────────────────────────────────────────────────────────
-    ivs_vulner = gdf.get("IVS_SCORE", pd.Series(0.0, index=gdf.index)).fillna(0) >= 3
-    em_risco   = gdf.get("em_risco", pd.Series(0, index=gdf.index)).astype(bool)
-    gdf["VULNERAB_COMPOSTA"] = (ivs_vulner & em_risco).astype("int8")
+    ivs = gdf.get('IVS_SCORE', pd.Series(np.nan, index=gdf.index)).astype('Float64')
+    ivs_vulner = ivs >= 3
+    em_risco = gdf.get('em_risco', pd.Series(pd.NA, index=gdf.index)).astype('boolean')
+    gdf['VULNERAB_COMPOSTA'] = (ivs_vulner & em_risco).astype('Int8')
 
-    nao_territ = gdf.get("FLAG_TERRITORIAL", pd.Series(0, index=gdf.index)) == 0
-    infra_ok   = gdf.get("INFRA_SCORE", pd.Series(np.nan, index=gdf.index)).fillna(0) >= 4
-    gdf["CONTEXTO_FORMAL"] = (nao_territ & infra_ok).astype("int8")
+    nao_territ = gdf.get('FLAG_TERRITORIAL', pd.Series(np.nan, index=gdf.index)).astype('Float64') == 0
+    infra_ok = gdf.get('INFRA_SCORE', pd.Series(np.nan, index=gdf.index)).astype('Float64') >= 4
+    gdf['CONTEXTO_FORMAL'] = (nao_territ & infra_ok).astype('Int8')
 
     if "IVS_SCORE" in gdf.columns:
-        gdf["IVS_ALTO"] = (gdf["IVS_SCORE"] >= 3).astype("int8")
+        gdf['IVS_ALTO'] = ivs_vulner.astype('Int8')
 
     # ── PAV_TIPO categórico ───────────────────────────────────────────────────
     if "PAV_EST" in gdf.columns:
@@ -544,7 +589,7 @@ def print_coverage_summary(gdf):
                            "VIA_LARGURA_ORD", "FLAG_BECO"],
         "Declividade":     ["DECLIV_MEDIANA", "DECLIV_DESVPAD", "DECLIV_CLASSE"],
         "Zoneamento":      ["ZONA_TIPO", "ZONA_CLASSE", "FLAG_ZONA_SOCIAL"],
-        "Atividade Econ":  ["DENS_ATIV_ECON_KM2", "FLAG_ESTAB_VALIDADO", "DIST_ATIV_MIN_M"],
+        "Atividade Econ":  ["DENS_ATIV_ECON_KM2", "FLAG_ATIV_PROXIMA_50M", "DIST_ATIV_MIN_M"],
         "Setor Censit":    ["POP_SETOR", "DOM_SETOR", "DENS_DOM_KM2"],
         "Informalidade":   ["em_favela", "TIPO_ASSENTAMENTO", "TEM_PLANO_URBANO",
                            "PLANO_URBANO_ORD", "VULNERAB_COMPOSTA"],
@@ -563,29 +608,52 @@ def print_coverage_summary(gdf):
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    console.rule("[bold]ETL — Enriquecimento Master Parquet")
-
-    gdf = load_base()
-    gdf = join_ivs(gdf)
-    gdf = join_area_risco(gdf)
-    gdf = join_lote_ctm(gdf)
-    gdf = join_cadastro(gdf)
-    gdf = join_edificacao(gdf)
-    gdf = join_via_classifica(gdf)
-    gdf = join_declividade(gdf)
-    gdf = join_zoneamento(gdf)
-    gdf = join_atividade_economica(gdf)
-    gdf = join_setor_pop(gdf)
-    gdf = join_vila_favela_enriched(gdf)
-    gdf = add_internal_flags(gdf)
-    gdf = add_derived(gdf)
-
+def executar(base, destino):
+    global ETAPA_ATUAL
+    AUDITORIA_JUNCOES.clear()
+    # Uma execução completa não deve produzir silenciosamente um mestre parcial.
+    camadas = ['ivs', 'area_risco', 'lote_ctm', 'cadastro_lotes', 'edificacao',
+               'via_classifica', 'declividade', 'zoneamento', 'atividade_economica',
+               'setor_censitario', 'vila_favela']
+    entradas = [Path(base)] + [PROC / (c + '.parquet') for c in camadas]
+    hashes = {}
+    for arquivo in entradas:
+        with arquivo.open('rb') as stream:
+            hashes[str(arquivo)] = hashlib.file_digest(stream, 'sha256').hexdigest()
+    gdf = load_base(base)
+    origem = gdf['idx_cnefe_original'].copy()
+    n_colunas_base = len(gdf.columns)
+    etapas = []
+    for funcao in [join_ivs, join_area_risco, join_lote_ctm, join_cadastro,
+                   join_edificacao, join_via_classifica, join_declividade,
+                   join_zoneamento, join_atividade_economica, join_setor_pop,
+                   join_vila_favela_enriched, add_internal_flags, add_derived]:
+        ETAPA_ATUAL = funcao.__name__
+        gdf = funcao(gdf)
+        if not gdf['idx_cnefe_original'].equals(origem):
+            raise ValueError(f'{ETAPA_ATUAL} alterou cardinalidade, ordem ou origem')
+        etapas.append({'etapa': ETAPA_ATUAL, 'registros': len(gdf), 'colunas': len(gdf.columns)})
     print_coverage_summary(gdf)
+    destino = Path(destino)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    temporario = destino.with_suffix('.temporario.parquet')
+    gdf.to_parquet(temporario)
+    temporario.replace(destino)
+    manifesto = {'entradas_sha256': hashes,
+        'codigo_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'versoes': {'pandas': pd.__version__, 'geopandas': gpd.__version__, 'numpy': np.__version__},
+        'regras': {'sobreposicao': 'atributo consensual, conflito como ausente',
+                   'presenca': 'geometria, independente do preenchimento do atributo',
+                   'atividade_proxima': 'distância até 50 m, não valida identidade'},
+        'etapas': etapas, 'juncoes': AUDITORIA_JUNCOES}
+    destino.with_suffix('.manifesto.json').write_text(json.dumps(manifesto,ensure_ascii=False,indent=2)+'\n', encoding='utf-8')
+    print(f'[SAVE] {destino}: {len(gdf):,} registros e {len(gdf.columns)-n_colunas_base} atributos adicionados')
+    return gdf
 
-    out = OUT / "cnefe_master_metrics.parquet"
-    print(f"\n[SAVE] Salvando {out.name} ({len(gdf):,} registros, {len(gdf.columns)} colunas) ...")
-    gdf.to_parquet(out)
-    print(f"  -> {out.stat().st_size/1e6:.1f} MB")
-    print("\n[DONE] cnefe_master_metrics.parquet gerado com sucesso.")
-    print(f"       Total de colunas contextuais: {len(gdf.columns) - 30} (sobre base de 30)")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Enriquece o mestre, registrando conflitos e proveniência.')
+    parser.add_argument('--base-parquet', type=Path, default=PROC/'cnefe_master_metrics_base.parquet')
+    parser.add_argument('--output-parquet', type=Path, default=OUT/'cnefe_master_metrics.parquet')
+    args = parser.parse_args()
+    executar(args.base_parquet, args.output_parquet)

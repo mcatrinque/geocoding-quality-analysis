@@ -1,225 +1,108 @@
-# Qualidade de geocodificação e repositório de endereços de referência
+# Repositório de endereços de referência para geocodificação: formação e avaliação com o CNEFE 2022 em Belo Horizonte
 
-![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
-![Jupyter](https://img.shields.io/badge/Jupyter-13%20notebooks-F37626?logo=jupyter&logoColor=white)
-![PostGIS](https://img.shields.io/badge/PostGIS-15--3.3-336791?logo=postgresql&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-prova%20de%20conceito-009688?logo=fastapi&logoColor=white)
-![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
+Dissertação de Mateus Rezende de Sá Catrinque, PPGCC/DCC/UFMG, orientada pelo Prof. Dr. Clodoveu Augusto Davis Jr. O objeto é a formação de um repositório de endereços de referência. A comparação CNEFE × BHMap é seu pilar empírico e a API é uma prova de conceito.
 
-![Status](https://img.shields.io/badge/status-pesquisa%20em%20andamento-E8A33D)
-![PPGCC UFMG](https://img.shields.io/badge/PPGCC-UFMG-0F4C81)
-![Dados](https://img.shields.io/badge/dados-CNEFE%202022%20%C3%97%20BHMap-6A737D)
-[![Último commit](https://img.shields.io/github/last-commit/mcatrinque/geocoding-quality-analysis?label=%C3%BAltimo%20commit&color=4C7A34)](https://github.com/mcatrinque/geocoding-quality-analysis/commits/main)
+## Estado em 01/10/2026
 
-Avaliação da qualidade do CNEFE 2022 contra a base oficial de endereços de Belo Horizonte, e a estrutura que transforma esse resultado em um repositório de endereços consultável. Pesquisa de dissertação de mestrado em Ciência da Computação (PPGCC/DCC/UFMG).
+A auditoria identificou associação incorreta entre métricas e registros depois da ordenação do pareamento. A junção foi corrigida por `idx_cnefe_original`, e NB03 a NB05 reproduziram o mestre-base reparado. Em 01/10, o enriquecimento contextual preservou 1.172.902 registros e produziu um mestre com 119 colunas. O arquivo promovido em `data/processed/` tem SHA-256 `536aba45d07b1a974d37eb69c1cf994e1c03781062512860d7a5690d13f0441d`. NB06, NB08, NB09, NB12 e NB13 foram executados em isolamento sobre essa versão. A suíte passou com 136 testes, sem falhas ou testes ignorados, incluindo PostGIS real com dados sintéticos. A carga censal completa e os contratos HTTP na imagem Docker foram verificados. A dissertação continua em revisão.
 
-## Visão geral
+O [estado de 01/10](docs/reparos/2026-10-01/estado_dos_reparos.md) distingue os resultados reexecutados das verificações ainda pendentes. O [relatório de 30/09](docs/reparos/2026-09-30/estado_dos_reparos.md) e o [parecer de auditoria](docs/auditorias/2026-09-25/parecer.md) preservam o histórico. Esses documentos são locais, excluídos do Git pela configuração atual.
 
-Geocodificar é converter a descrição textual de um endereço em coordenada. O resultado dessa conversão carrega um erro que quase nunca é informado a quem consome o dado: o serviço devolve um ponto, não a incerteza daquele ponto. Em análises de política pública e estudos socioespaciais, esse erro se propaga silenciosamente para dentro dos modelos.
+Não estão sustentadas as afirmações anteriores de ortogonalidade dos indicadores ou de transferência refutada entre cidades. O GCI com MCI depende do cadastro de comparação. O inverso do CDI é um escore experimental, não uma probabilidade calibrada de identidade correta.
 
-O CNEFE 2022 é a primeira base de endereços brasileira com coordenadas coletadas em campo em escala nacional. Este projeto mede a qualidade dessas coordenadas em Belo Horizonte, usando como referência externa a base georreferenciada de endereços e lotes da Prefeitura, e usa o que essa medição revela para montar um repositório de endereços que devolve, junto da coordenada, um indicador de confiança calibrado empiricamente.
+## Protocolos e unidades
 
-O repositório versiona as duas coisas: a **análise** que caracteriza a qualidade e a **estrutura** que materializa o repositório de endereços. O texto da dissertação, a bibliografia e os dados de entrada ficam fora do controle de versão.
-
-## Arquitetura
-
-```mermaid
-flowchart TB
-    subgraph FONTES["Fontes de dados"]
-        direction LR
-        CNEFE["<b>CNEFE 2022 · IBGE</b><br/>1.180.102 endereços em BH<br/>coordenada coletada em campo"]
-        BHMAP["<b>BHMap · PBH</b><br/>757.113 pontos<br/>515.953 com existência confirmada"]
-        CTX["<b>Contexto urbano · PBH</b><br/>setores, vias, zoneamento,<br/>vilas e favelas, IPTU, declividade"]
-    end
-
-    subgraph ANALISE["Análise de qualidade · notebooks 01-13"]
-        direction TB
-        NB12["<b>01-02</b> · Ingestão e matching espacial<br/>pareamento CNEFE × BHMap → MCI"]
-        NB35["<b>03-05</b> · Métricas de qualidade<br/>CDI, LCI, completude, RMSE, CE90, GCI"]
-        NB67["<b>06-07</b> · Consolidação e validação<br/>agregação por edifício, protocolo ISO 19157"]
-        NB813["<b>08-13</b> · Caracterização<br/>segmentação, LISA, GWR, Random Forest e SHAP"]
-    end
-
-    subgraph REPO["Repositório de endereços"]
-        direction TB
-        DB[("<b>PostGIS</b><br/>fonte · endereco · unidade<br/>índices GIST e trigrama")]
-        API["<b>API FastAPI</b><br/>/geocode · /reverse · /usage"]
-        DB --> API
-    end
-
-    CNEFE --> NB12
-    BHMAP --> NB12
-    CTX --> ETL["<b>process_context_layers.py</b><br/>camadas → GeoParquet"]
-
-    NB12 --> NB35
-    NB35 --> ENR["<b>enrich_master_metrics.py</b><br/>junção com o contexto urbano"]
-    ETL --> ENR
-    ENR --> MASTER[("<b>cnefe_master_metrics.parquet</b><br/>1.172.902 registros · 116 colunas")]
-
-    MASTER --> NB67
-    MASTER --> NB813
-    MASTER --> LOAD["<b>load_cnefe_to_postgis.py</b><br/>deduplicação por endereço geocodificável<br/>761.411 endereços consolidados"]
-    LOAD --> DB
-    NB67 -. valida o indicador .-> LOAD
-
-    API --> USO["<b>Consulta</b><br/>coordenada + Plus Code +<br/>classe de confiança e indicadores"]
-```
-
-Os três blocos têm papéis distintos. As **fontes** são todas públicas e nenhuma delas é versionada aqui. A **análise** produz um arquivo mestre com um registro por endereço do CNEFE, carregando as métricas de qualidade e as variáveis de contexto urbano; é o que sustenta a caracterização da qualidade. O **repositório** consome esse arquivo mestre: os endereços entram no PostGIS já com os indicadores calculados, e a API os devolve junto da coordenada, em vez de entregar um ponto sem qualificação.
-
-## Métricas de qualidade
-
-As métricas de certeza seguem a formulação de Davis Jr. & Fonseca (2007), adaptadas à escala do CNEFE e ao que é observável nesta base. A implementação está em [src/metrics.py](src/metrics.py).
-
-| Métrica | O que mede | Como é calculada |
+| Protocolo | O que observa | Limitação |
 | --- | --- | --- |
-| **LCI** | Certeza do método de coleta | Peso atribuído a `NV_GEO_COORD`: medição em campo vale mais que estimativa distante |
-| **MCI** | Certeza do pareamento com a referência | Combina distância euclidiana e similaridade textual do logradouro |
-| **PCI** | Certeza posicional pelo tipo construtivo | Penaliza apartamentos, onde a coordenada representa o edifício e não a unidade |
-| **CDI** | Duplicação de coordenada | Quantos registros compartilham a mesma coordenada, arredondada a cerca de 1 m |
-| **GCI** | Índice composto | `LCI × MCI × PCI` |
-| **Completude** | Presença dos atributos do endereço | Ponderação de CEP, logradouro, complemento e localidade, no espírito da ISO 19157 |
-| **CCR, DRS, CSI** | Coerência intrínseca da coordenada | Contenção no setor censitário declarado, distância à via mais próxima, isolamento em relação ao centróide do setor |
-| **RMSE, CE90, MAE, mediana** | Acurácia posicional | Estatísticas sobre a distância a cada par BHMap |
+| Proximidade, raio de 100 m | Existência de ponto BHMap perto do registro CNEFE | Não confirma endereço e trunca a distância |
+| Chave textual conciliada, sem raio | Logradouro normalizado e primeira sequência numérica coincidentes | Descarta sufixo e escolhe o mais próximo entre candidatos da chave |
+| Sensibilidade com sufixo | Conjuntos preservando um sufixo alfabético | Altera a unidade de correspondência e requer revisão manual |
 
-O projeto trabalha com duas versões do índice composto. O **GCI original** usa o PCI heurístico, derivado do tipo de espécie e do complemento. O **GCI empírico** substitui esse termo por `1/CDI`, medindo a incerteza de identidade diretamente do dado em vez de inferi-la do rótulo: quando duzentos apartamentos compartilham um ponto, a coordenada identifica o edifício, não o endereço consultado. É o GCI empírico que segue para o repositório, e o Notebook 07 é quem o submete ao protocolo de validação de indicadores compostos.
+Pela regra conciliada, 913.534 dos 1.180.102 registros encontram chave comum, com mediana de deslocamento de 9,72 m, CE90 de 33,59 m e 2,63% acima de 100 m. São discrepâncias entre fontes, não erros absolutos certificados. Contam-se 346.244 chaves comuns, 109.763 só no CNEFE e 76.723 só no BHMap. Esses conjuntos não são uma matriz de confusão sem rótulos independentes de verdade.
+
+## Métricas
+
+| Indicador | Interpretação e dependência |
+| --- | --- |
+| CDI | Contagem de registros com coordenadas compartilhadas após arredondamento |
+| CCR | Contenção no setor declarado, exige malha auxiliar |
+| DRS | Distância à via, exige camada viária |
+| LCI local | Pesos heurísticos sobre `NV_GEO_COORD`, sem calibração métrica demonstrada |
+| MCI local | Similaridade e proximidade ao BHMap, depende de referência externa |
+| `PCI_empirico` legado | `1/CDI`. Não equivale ao Parsing Certainty Indicator de Davis e Fonseca |
+| `GCI_empirico` legado | `LCI × MCI / CDI`, composto experimental e extrínseco |
+| Mediana, CE90 e cauda | Resumo do deslocamento sob protocolo e população declarados |
+
+O dicionário de `NV_GEO_COORD` distingue coordenada original, modificada por agrupamento de apartamentos, estimada por ausência ou invalidade, face de quadra, localidade e setor. O código 2 não significa simplesmente estimativa próxima.
 
 ## Pipeline analítico
 
-Os notebooks são a espinha dorsal do trabalho e rodam em sequência. [run_pipeline.py](run_pipeline.py) encadeia notebooks e scripts ETL na ordem correta.
+O [run_pipeline.py](run_pipeline.py) prepara as camadas de contexto, executa os notebooks de análise em sequência e roda o enriquecimento contextual entre o NB05 e o NB06. `--from etl --dry-run` mostra a retomada sem executar nem limpar arquivos. `--com-api` inclui os notebooks que exigem a API no ar (NB14 e NB17).
 
-| Notebook | O que faz |
+Cada notebook narra uma etapa da análise: introdução com as perguntas, as entradas e as saídas, seções com contexto, código e interpretação dos resultados, e conclusão com o próximo passo.
+
+| Notebook | Conteúdo |
 | --- | --- |
-| [01_ingestao](notebooks/01_ingestao.ipynb) | Carrega e prepara o CNEFE e o BHMap |
-| [02_matching](notebooks/02_matching.ipynb) | Pareia cada registro do CNEFE ao endereço BHMap correspondente e calcula o MCI |
-| [03_eda_bases](notebooks/03_eda_bases.ipynb) | Análise exploratória das bases e motivação empírica das métricas intrínsecas |
-| [04_lci_completude](notebooks/04_lci_completude.ipynb) | Métricas calculáveis apenas com o CNEFE: LCI e completude |
-| [05_acuracia_gci](notebooks/05_acuracia_gci.ipynb) | Acurácia posicional contra o par BHMap e composição do GCI |
-| [06_consolidacao_edificios](notebooks/06_consolidacao_edificios.ipynb) | Agrega por edifício e examina o viés de verticalização no CDI |
-| [07_validacao_gci](notebooks/07_validacao_gci.ipynb) | Validação formal do GCI empírico: correlação com o erro real, validade discriminante, ablação |
-| [08_eda_contextual](notebooks/08_eda_contextual.ipynb) | Caracteriza as camadas de contexto e faz o screening das covariáveis |
-| [09_segmentacao_tipologica](notebooks/09_segmentacao_tipologica.ipynb) | Qualidade segmentada por tipologia construtiva e características do endereço |
-| [10_segmentacao_uso](notebooks/10_segmentacao_uso.ipynb) | Qualidade por uso do solo e condição de assentamento |
-| [11_analise_socioespacial](notebooks/11_analise_socioespacial.ipynb) | Estrutura espacial da qualidade: LISA com correção FDR, GWR e Spatial Error Model |
-| [12_determinantes_gci](notebooks/12_determinantes_gci.ipynb) | Determinantes do GCI via Random Forest com validação cruzada e SHAP |
-| [13_sintese_final](notebooks/13_sintese_final.ipynb) | Consolida as contribuições e as recomendações |
+| [01](notebooks/01_ingestao.ipynb) | Ingestão do CNEFE e do BHMap, projeção e composição das bases |
+| [02](notebooks/02_matching.ipynb) | Proximidade e pareamento pela chave de logradouro e número, conciliação de grafia e sensibilidade |
+| [03](notebooks/03_eda_bases.ipynb) | Exploração das bases e métricas intrínsecas da coordenada (CDI, CCR, DRS, CSI) |
+| [04](notebooks/04_lci_completude.ipynb) | Indicador de localização e completude do endereço |
+| [05](notebooks/05_acuracia_gci.ipynb) | Deslocamento entre os cadastros, compostos locais, H1 e H2 |
+| [06](notebooks/06_consolidacao_edificios.ipynb) | Agrupamento de registros por endereço e coordenada |
+| [07](notebooks/07_validacao_gci.ipynb) | Indicadores de qualidade e deslocamento (H7) |
+| [08](notebooks/08_eda_contextual.ipynb) | Camadas de contexto urbano e deslocamento por regional |
+| [09](notebooks/09_segmentacao_tipologica.ipynb) | Tipologia, coleta e contexto com inferência por chave e blocos espaciais |
+| [10](notebooks/10_segmentacao_uso.ipynb) | Atividade econômica e vilas e favelas |
+| [11](notebooks/11_analise_socioespacial.ipynb) | Dependência espacial do deslocamento (H3) |
+| [12](notebooks/12_determinantes_gci.ipynb) | Predição do deslocamento em blocos espaciais |
+| [14](notebooks/14_api_poc.ipynb) | Prova de conceito da API e comparação com o geocodebr |
+| [15](notebooks/15_conjuntos_estratos.ipynb) | Conjuntos de chaves, estratos e vetores de deslocamento |
+| [16](notebooks/16_adjudicacao_cadastral.ipynb) | Evidência cadastral da cauda e dos registros sem par |
+| [17](notebooks/17_teste_operacional_independente.ipynb) | Teste independente da calibração da API |
+| [18](notebooks/18_restricao_territorial.ipynb) | Concordância de bairro e CEP e restrição territorial do pareamento |
+| [22](notebooks/22_conjuntos_exclusivos.ipynb) | Composição das chaves exclusivas e filtro de existência |
+| [23](notebooks/23_referencia_municipal_completa.ipynb) | Pareamento com todos os pontos do cadastro municipal, atributos de placa e situação como sensibilidade |
+| [24](notebooks/24_composicao_bases.ipynb) | Como cada base representa endereços e estratos, e quem está em cada conjunto |
+| [25](notebooks/25_setor_censitario.ipynb) | Setor censitário dos pares, restrição por setor e dependência espacial do deslocamento |
 
-O pareamento do Notebook 02 forma 1.172.902 pares dentro do raio de busca, com 7.200 registros sem par. Essa taxa alta não é, por si só, evidência de acerto: o pareamento é por vizinho mais próximo dentro de 100 m combinado à similaridade textual, e é justamente o MCI que gradua a confiança de cada par.
+A numeração ainda tem lacunas e será refeita em sequência contínua.
 
-## Repositório de endereços
+O enriquecimento contextual atribui atributos apenas quando os candidatos espaciais concordam, e calcula presença geométrica de risco e vila ou favela separadamente dos rótulos. Empates de vias e sobreposições ficam documentados no manifesto. A atividade econômica a até 50 m indica proximidade, não identidade do estabelecimento. O NB08 separa cobertura do atributo, presença espacial e deslocamento por identidade.
 
-O esquema em [src/db/init.sql](src/db/init.sql) separa o endereço geocodificável das unidades que compartilham a coordenada.
+## Repositório e API
 
-```mermaid
-erDiagram
-    FONTE ||--o{ ENDERECO : origina
-    ENDERECO ||--o{ UNIDADE : agrupa
+O [esquema PostGIS](src/db/init.sql) separa fonte, endereço, unidade, registro de origem e manifesto da carga. O manifesto registra hashes e contagens. Complementos ficam fora da chave geocodificável. `n_unidades` é um nome legado para registros agrupados, sem comprovação de unidades distintas.
 
-    FONTE {
-        serial id_fonte PK
-        varchar nome "CNEFE_2022, BHMAP_EXISTENTE"
-        text descricao
-        timestamp data_carga
-    }
-    ENDERECO {
-        bigint id_endereco PK
-        int id_fonte FK
-        varchar logradouro "forma canônica"
-        varchar numero
-        varchar bairro
-        varchar cep
-        numeric lci "certeza de coleta"
-        numeric mci "certeza de pareamento"
-        int cdi "duplicação de coordenada"
-        numeric gci "índice composto empírico"
-        int n_unidades "unidades na mesma coordenada"
-        geometry geom "Point, SRID 4326"
-    }
-    UNIDADE {
-        bigint id_unidade PK
-        bigint id_endereco FK
-        varchar complemento "apartamento, sala, loja"
-    }
-```
+A [carga](scripts/load_cnefe_to_postgis.py) usa o CNEFE completo, sem excluir registros por ausência de vizinho municipal. Métricas são opcionais e anexadas pelo índice original. A substituição é delimitada por fonte, município e versão em uma transação. Testes com registros sintéticos em PostGIS real verificaram preservação de IDs de endereços e unidades, origens, outro município e rollback após falha intermediária. Uma primeira tentativa censal encontrou incompatibilidade no tipo inteiro do CDI, corrigida antes da nova execução. A execução corrigida persistiu 1.180.102 origens, 590.615 endereços, 690.016 complementos e 12.638 logradouros de busca em 8,40 minutos. A recarga censal ainda não foi medida.
 
-A separação resolve um problema concreto: um prédio de duzentos apartamentos ocupa uma linha em `endereco`, não duzentas. O complemento fica em `unidade`, preservado sem duplicar o ponto geocodificável, e `n_unidades` registra quantas unidades dividem aquela coordenada. O esquema é multi-fonte desde o início — `fonte` permite que outras bases entrem sem alterar o modelo, e a resposta da API sempre diz de onde veio o endereço.
+A consolidação usa componentes conexos da mesma chave ligados por passos de até 30 m. Isso não limita o diâmetro do grupo a 30 m. A dispersão é a diagonal da caixa envolvente. Indicadores discordantes no grupo ficam ausentes no agregado e são preservados por registro de origem. O número preserva sufixo: `10` e `10A` não recebem correspondência exata entre si.
 
-Dois índices sustentam a consulta: GIST sobre a geometria, para busca por proximidade e vizinho mais próximo, e GIN trigrama sobre o logradouro, para o casamento aproximado do texto digitado.
-
-### API
-
-Prova de conceito em FastAPI ([src/api/](src/api/)). A consulta é normalizada para a forma canônica do repositório antes da busca, o que a torna robusta a abreviações e acentos.
-
-| Rota | O que faz |
+| Rota | Contrato |
 | --- | --- |
-| `POST /geocode` | Recebe um endereço em texto e devolve até cinco candidatos ordenados |
-| `POST /reverse` | Recebe uma coordenada e devolve o endereço mais próximo, com a distância em metros |
-| `GET /usage` | Contabiliza as requisições por rota |
+| `GET/POST /geocode` | Candidatos ordenados, fonte, coordenada, Plus Code e nível de correspondência |
+| `POST /reverse` | Candidato mais próximo em metros, nível `proximidade`, sem comprovação de identidade |
+| `GET /cobertura` | Conteúdo carregado por município e fonte |
+| `GET /health` | Estado do banco, sem detalhes internos de erro |
+| `GET /usage` | Eventos persistidos e perdas e pendências do processo |
 
-Toda resposta traz a fonte, o Plus Code da coordenada, os indicadores LCI, MCI, CDI e GCI empírico, e a classe de confiança derivada deles — alta, moderada ou baixa. É essa qualificação, e não o ponto isolado, que diferencia o repositório de um geocodificador convencional.
+As classes de qualidade são heurísticas. A tabela histórica de BH foi usada no desenvolvimento e não habilita `calibrada`. O validador exige amostra independente, versões compatíveis, métricas válidas e contagens consistentes. A versão da resposta é vinculada ao manifesto efetivo da carga. Falta produzir uma avaliação independente elegível. As rotas permanecem `declarada`, sem estimativas em metros nem GCI apresentado como calibrado. Uma variável de ambiente não certifica o conteúdo do banco.
 
-## Estrutura do repositório
+A contabilização passa por fila em memória e pode perder eventos. Perdas, pendências e limite de requisições são por processo. Com múltiplos workers, o limite não é uma cota global por cliente.
 
-```text
-├── notebooks/                     # Núcleo analítico, na ordem de execução
-│   └── 01_ingestao ... 13_sintese_final.ipynb
-├── src/
-│   ├── config.py                  # Caminhos, dicionários do CNEFE e parâmetros
-│   ├── metrics.py                 # LCI, MCI, PCI, CDI, GCI, CCR, DRS, CSI, RMSE, CE90
-│   ├── normalize.py               # Forma canônica de logradouros
-│   ├── env.py                     # Credenciais do banco lidas do ambiente
-│   ├── db/
-│   │   └── init.sql               # Esquema PostGIS: fonte, endereco, unidade
-│   └── api/                       # Prova de conceito do serviço
-│       ├── main.py                # Rotas /geocode, /reverse e /usage
-│       ├── database.py            # Sessão SQLAlchemy
-│       └── schemas.py             # Contratos de entrada e saída
-├── scripts/
-│   ├── process_context_layers.py  # Camadas de contexto urbano para GeoParquet
-│   ├── enrich_master_metrics.py   # Junção das métricas com o contexto
-│   └── load_cnefe_to_postgis.py   # Carga do arquivo mestre no repositório
-├── docker-compose.yml             # PostGIS e API
-├── run_pipeline.py                # Execução encadeada de notebooks e ETLs
-├── requirements.txt
-├── .env.example                   # Modelo das credenciais locais
-└── README.md
-```
+O esquema permite registrar outras fontes, mas a integração operacional de BHMap e a consolidação entre fontes não estão demonstradas. O ponto de extensão para modelos de linguagem não implementa crowdsourcing nem atualização do cadastro.
 
-## Como executar
+## Execução
 
-### Análise
+1. Prepare Python com `requirements.txt` e as fontes em `data/raw/`. Versões fixadas ajudam, mas não garantem equivalência entre sistemas.
+2. Inspecione `python run_pipeline.py --from etl --dry-run` antes de regenerar análises. Executar células não resolve automaticamente as revisões científicas pendentes.
+3. Para a API, copie `.env.example` para `.env` e configure credenciais locais.
+4. Inicie `docker compose up -d --build`. Execute `python scripts/load_cnefe_to_postgis.py --parquet <fonte-completa.parquet> --municipio "Belo Horizonte" --uf MG --codigo-ibge 3106200 --versao-fonte 2022`. Use `--qualidade-parquet` somente com métricas da mesma origem e versão.
+5. Consulte `http://localhost:8000/docs` e execute `python -m pytest tests/`. Os testes de integração exigem o PostGIS de teste configurado.
 
-1. Clone o repositório e crie um ambiente virtual com as dependências de `requirements.txt`.
-2. Disponha os arquivos do CNEFE 2022 e as bases do BHMap em `data/raw/`.
-3. Execute os notebooks em sequência a partir de `01_ingestao.ipynb`, ou use `python run_pipeline.py` para encadeá-los. O pipeline aceita retomada parcial, por exemplo `--from nb08`.
+`API_KEYS` ativa identificação e `LIMITE_POR_MINUTO` define o limite por processo. O acesso é aberto por padrão. Em 01/10/2026, a suíte passou contra PostGIS isolado com dados sintéticos de dois municípios. A imagem em `localhost:58001` foi verificada com a carga completa pelas rotas de saúde, cobertura, geocodificação, reversa e uso. Confirmaram-se Plus Code, versão vinculada ao manifesto, recusa em município não carregado e qualidade declarada. Essa verificação operacional não substitui a avaliação independente de acurácia, ainda pendente.
 
-As versões fixadas em `requirements.txt` asseguram a reprodução. A extensão espacial do DuckDB é instalada em tempo de execução, conforme a nota no próprio arquivo.
+## Dados locais e referências
 
-### Repositório de endereços e API
+`data/`, `outputs/`, `references/`, `docs/` e `scratch/` contêm fontes, análises, bibliografia e material local. A amostra de revisão contém endereços e não foi publicada. Um pacote público reproduzível exige seleção de artefatos e revisão das licenças.
 
-1. Copie `.env.example` para `.env` e defina as credenciais. O `.env` não é versionado e nenhuma senha fica no código; o `docker compose` falha com mensagem explícita se as variáveis estiverem ausentes.
-2. Suba os serviços com `docker compose up -d`. Na primeira execução, o `init.sql` cria as extensões PostGIS e `pg_trgm`, as tabelas e os índices.
-3. Carregue os endereços consolidados pela análise: `python scripts/load_cnefe_to_postgis.py`.
-4. Abra a documentação interativa em `http://localhost:8000/docs`.
-
-## Dados e artefatos não versionados
-
-Ficam fora do controle de versão, por serem dados externos, artefatos reprodutíveis ou material da dissertação:
-
-- `data/` — CNEFE 2022 e bases do BHMap, todas obtidas de portais públicos
-- `outputs/` — figuras, mapas e tabelas, regeneráveis pelo pipeline
-- `references/` — bibliografia
-- `docs/` — texto da dissertação e relatórios
-
-## Referências
-
-Os indicadores de certeza derivam da formulação de Davis Jr. & Fonseca (2007), levada à escala do CNEFE e adaptada ao que é observável nesta base.
-
-- DAVIS JR., Clodoveu A.; FONSECA, Frederico T. Assessing the certainty of locations produced by an address geocoding system. *GeoInformatica*, v. 11, n. 1, p. 103–129, 2007.
-- MARTINS, D.; DAVIS JR., Clodoveu A.; FONSECA, Frederico T. Geocodificação de endereços urbanos com indicação de qualidade. In: *Anais do XIII Simpósio Brasileiro de Geoinformática (GeoInfo)*, 2012.
-- DAVIS JR., Clodoveu A.; ALENCAR, Rafael Odon de. Evaluation of the quality of an online geocoding resource in the context of a large Brazilian city. *Transactions in GIS*, v. 15, n. 6, p. 851–868, 2011.
-- IBGE. *Nota metodológica: coordenadas geográficas dos endereços do Censo Demográfico 2022*. Rio de Janeiro, 2022.
-
-## Sobre
-
-Dissertação de mestrado em Ciência da Computação pela Universidade Federal de Minas Gerais, sobre incerteza posicional em geocodificação, formação de repositórios de endereços de referência e desigualdade espacial na qualidade do dado, com Belo Horizonte como estudo de caso.
+Referências de base: Davis Jr. e Fonseca, *Assessing the certainty of locations produced by an address geocoding system* (GeoInformatica, 2007); Davis Jr. e Alencar, *Evaluation of the quality of an online geocoding resource in the context of a large Brazilian city* (Transactions in GIS, 2011); documentação do IBGE para o CNEFE e as coordenadas do Censo 2022. A conferência bibliográfica está registrada na auditoria local.

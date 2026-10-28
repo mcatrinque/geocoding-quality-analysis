@@ -1,6 +1,6 @@
 """
 metrics.py — Métricas de Qualidade da Geocodificação
-Davis & Fonseca (2007) + ISO 19157
+Componentes adaptados localmente do GCI de Davis e Fonseca (2007) e métricas ISO 19157.
 
 Implementa: LCI, MCI, PCI, GCI, Completude, RMSE, CE90
 Métricas de coordenada (intrínsecas): CCR, CDI, DRS, PCI_empirico
@@ -15,16 +15,14 @@ from rapidfuzz import fuzz
 # ============================================================
 def calculate_lci(nv_geo_coord_series, weights_map=None):
     """
-    Locating Certainty Indicator (LCI) conforme Davis & Fonseca (2007).
-    Mede a certeza da coordenada produzida pelo geocodificador.
+    Adaptação local de LCI, com pesos históricos não calibrados.
 
-    No contexto do CNEFE 2022, o campo NV_GEO_COORD indica o método
-    de obtenção da coordenada:
-        1 = Medido em campo → LCI = 1.0
-        2 = Estimado próximo → LCI = 0.8
-        3 = Estimado distante → LCI = 0.5
-        4 = Outro método → LCI = 0.3
-        6 = Sem medição → LCI = 0.1
+    NV_GEO_COORD identifica procedimentos, não uma escala de erro observado:
+    1 original do Censo, 2 modificada pelo agrupamento de apartamentos,
+    3 estimada por ausência ou invalidade da original, 4 face de quadra,
+    5 localidade e 6 setor censitário. O mapa numérico é mantido como
+    baseline para comparar execuções. Não representa os pesos do IBGE
+    nem uma probabilidade validada de acerto.
 
     Args:
         nv_geo_coord_series: Series com valores NV_GEO_COORD
@@ -78,9 +76,9 @@ def calculate_completude(df, campos_pesos=None):
 # ============================================================
 def calculate_mci(distance, textual_sim, max_dist=100.0, alpha=0.5):
     """
-    Matching Certainty Indicator (MCI).
-    Quantifica a confiança no pareamento CNEFE ↔ BHMap usando
-    combinação linear de similaridade espacial e textual.
+    Adaptação local do Matching Certainty Indicator (MCI).
+    Combina similaridade textual e distância do candidato CNEFE ↔ BHMap.
+    Requer o cadastro BHMap e não é uma métrica intrínseca ao CNEFE.
 
     MCI = α × Sim_textual + (1-α) × Sim_espacial
 
@@ -109,14 +107,15 @@ def calculate_textual_similarity(str1, str2):
 
 
 # ============================================================
-# PCI — Positional Certainty Indicator (Davis & Fonseca, 2007)
+# Peso por tipologia do baseline local, distinto do PCI de parsing de Davis e Fonseca (2007)
 # ============================================================
 def calculate_pci(df, tipo_col='COD_TIPO_ESPECI', complemento_col='COMPLEMENTO',
                   vertical_score=0.5, horizontal_score=1.0):
     """
-    Positional Certainty Indicator (PCI).
-    Penaliza endereços verticalizados (apartamentos, edifícios) onde
-    a coordenada do ponto não distingue a unidade exata.
+    Peso por tipologia do baseline local, mantido com nome PCI por compatibilidade.
+    Os pesos de apartamentos e casas são uma escolha deste projeto. Não são o
+    Parsing Certainty Indicator definido por Davis e Fonseca (2007) e não
+    representam probabilidades calibradas contra erro posicional.
 
     Usa COD_TIPO_ESPECI (103=Apartamento) e/ou padrões no COMPLEMENTO.
 
@@ -151,8 +150,9 @@ def calculate_pci(df, tipo_col='COD_TIPO_ESPECI', complemento_col='COMPLEMENTO',
 # ============================================================
 def calculate_gci(lci, mci, pci):
     """
-    Geocoding Certainty Indicator: GCI = LCI × MCI × PCI
-    Métrica composta que integra as três dimensões de certeza.
+    Produto local denominado GCI = LCI × MCI × PCI.
+    O cálculo depende do MCI obtido com uma referência externa.
+    O PCI local por tipologia ou por 1/CDI não equivale ao PCI original de parsing.
     """
     return lci * mci * pci
 
@@ -198,16 +198,16 @@ def calculate_cdi(gdf, coord_precision_m=1):
     """
     CDI — Coordinate Duplication Index.
     Conta quantos registros compartilham a mesma coordenada (arredondada
-    à precisão dada em metros). Coordenadas compartilhadas indicam
-    estimativa em massa (centróide de quadra, ponto de rua) em vez de
-    medição individual.
+    à precisão dada em metros). Coincidências podem resultar de unidades
+    no mesmo edifício, arredondamento ou localização agregada.
 
-    Valores: n >= 1. CDI=1 → coordenada única (boa). CDI=N → N registros
-    no mesmo ponto (estimativa).
+    Valores: n >= 1. CDI=1 indica coordenada não repetida neste conjunto.
+    CDI=N indica N registros na mesma posição arredondada.
 
     Retorna duas Series:
         cdi        : contagem bruta de registros no mesmo ponto
-        pci_empirico: 1/cdi ∈ (0, 1] — substituto empírico para PCI arbitrário
+        pci_empirico: 1/cdi ∈ (0, 1], multiplicidade inversa. O nome é histórico.
+                       Não é probabilidade calibrada nem PCI de parsing.
 
     Args:
         gdf: GeoDataFrame com geometria UTM (metros)
@@ -344,3 +344,202 @@ def calculate_csi(gdf_cnefe, gdf_setores, setor_col_cnefe='COD_SETOR',
         distances[valid_mask] = pts.distance(ctrs_gs)
 
     return distances
+
+
+# ============================================================
+# Pareamento por identidade de endereço
+# O pareamento por vizinho mais próximo responde "existe ponto da referência
+# perto daqui", que não é a mesma pergunta que "este endereço existe na
+# referência e onde ela o coloca". As funções abaixo casam os dois cadastros
+# pela identidade do endereço (logradouro canônico e número), sem restrição de
+# distância, de modo que o deslocamento medido seja o do mesmo imóvel.
+# ============================================================
+
+def chave_identidade(logradouro, numero):
+    """Chave de identidade do endereço: (logradouro canônico, número em dígitos).
+
+    O logradouro passa pela forma canônica do repositório (sem acento, caixa
+    alta, tipo por extenso). Do número fica apenas a primeira sequência de
+    dígitos, sem zeros à esquerda, de modo que '0210', '210' e '210 A'
+    convergem para '210'.
+    """
+    from .normalize import normalize_logradouro
+
+    log = pd.Series(logradouro).map(normalize_logradouro)
+    num = (pd.Series(numero).astype(str)
+           .str.extract(r'(\d+)')[0]
+           .str.lstrip('0')
+           .replace('', np.nan))
+    return log, num
+
+
+def separar_logradouro_numero(serie_logrado_num):
+    """Separa 'LOGRADOURO, NUMERO' do CNEFE em duas séries.
+
+    O CNEFE traz logradouro e número no mesmo campo, separados por vírgula.
+    Em Belo Horizonte todos os 1.180.102 registros têm exatamente uma vírgula,
+    mas essa regularidade é do arquivo, não do formato, e a carga é usada em
+    outros municípios. Por isso o corte não confia cegamente na última vírgula:
+    quando o campo após ela não contém dígito algum, o que indica complemento em
+    vez de número, a separação recua para a vírgula anterior.
+
+    Registros sem vírgula ficam inteiros no logradouro e sem número.
+    """
+    s = pd.Series(serie_logrado_num).astype(str)
+    partes = s.str.rsplit(',', n=1, expand=True)
+    logradouro = partes[0].str.strip()
+    numero = partes[1].str.strip() if partes.shape[1] > 1 else pd.Series(np.nan, index=s.index)
+    sem_virgula = numero.isna() if partes.shape[1] > 1 else pd.Series(True, index=s.index)
+    logradouro = logradouro.where(~sem_virgula, s.str.strip())
+
+    # Complemento depois do número: um número de imóvel começa por dígito
+    # ('100', '55 A'), um complemento não ('SALA 2', 'APTO 301'). Quando o último
+    # campo não começa por dígito e ainda resta vírgula antes dele, o corte recua.
+    # Só se aplica quando algum registro tem vírgula; caso contrário a série de
+    # números é vazia e não há texto a inspecionar.
+    if partes.shape[1] > 1:
+        suspeito = (~sem_virgula
+                    & ~numero.fillna('').str.match(r'^\d')
+                    & logradouro.str.contains(',', na=False, regex=False))
+        if suspeito.any():
+            recuo = logradouro[suspeito].str.rsplit(',', n=1, expand=True)
+            logradouro.loc[suspeito] = recuo[0].str.strip()
+            numero.loc[suspeito] = recuo[1].str.strip()
+
+    return logradouro, numero
+
+
+def conciliar_logradouros(nomes_alvo, nomes_referencia, limiar=90, margem=2):
+    """Tabela de correspondência entre grafias de logradouro de duas fontes.
+
+    O casamento exato de nomes de via trata como ausente aquilo que é apenas
+    grafado de outro modo: TEREZA contra TERESA, PLINIO DE MORAIS contra PLINIO
+    MORAES, ou a abreviação BEC no lugar de BECO. Como esse tipo de variação é
+    mais frequente em áreas de urbanização informal, ignorá-la não apenas reduz
+    a cobertura do pareamento, mas a reduz de forma desigual entre estratos, o
+    que enviesa qualquer comparação entre eles.
+
+    A conciliação segue a tradição de casamento aproximado de nomes geográficos
+    de Davis Jr. e Salles (2007): compara por similaridade de tokens e aceita a
+    correspondência quando o melhor candidato atinge o limiar e está à frente
+    do segundo por pelo menos `margem` pontos. Isso reduz a aceitação de
+    candidatos com escores próximos, mas não comprova a identidade da via.
+    Designadores numéricos e alfabéticos, como PIUM I e PIUM II, não têm
+    proteção explícita; a margem não impede uma troca quando falta um
+    concorrente adequado na referência.
+
+    Parâmetros
+    ----------
+    nomes_alvo, nomes_referencia : iteráveis de str
+        Nomes canônicos distintos de cada fonte.
+    limiar : int
+        Similaridade mínima, de 0 a 100, pelo token_sort_ratio.
+    margem : int
+        Vantagem mínima do melhor candidato sobre o segundo colocado.
+
+    Retorna
+    -------
+    dict
+        Nome do alvo para nome da referência, apenas para os nomes que não
+        existem na referência com grafia idêntica e que foram conciliados.
+    """
+    from rapidfuzz import fuzz, process
+
+    referencia = sorted({n for n in nomes_referencia if n})
+    existentes = set(referencia)
+    pendentes = sorted({n for n in nomes_alvo if n and n not in existentes})
+    if not pendentes or not referencia:
+        return {}
+
+    pontuacoes = process.cdist(pendentes, referencia, scorer=fuzz.token_sort_ratio,
+                               workers=-1, score_cutoff=max(limiar - 10, 0))
+    mapa = {}
+    for i, nome in enumerate(pendentes):
+        linha = pontuacoes[i]
+        melhor = int(linha.argmax())
+        maior = linha[melhor]
+        if maior < limiar:
+            continue
+        segundo = np.partition(linha, -2)[-2] if len(linha) > 1 else 0
+        if maior - segundo < margem:
+            continue
+        mapa[nome] = referencia[melhor]
+    return mapa
+
+
+def parear_por_identidade(gdf_alvo, gdf_referencia, chave_alvo, chave_referencia,
+                          dispersao_ambigua_m=100.0, mapa_logradouros=None):
+    """Casa dois cadastros de endereço pela identidade (logradouro, número).
+
+    Não há restrição de distância: o par é definido pelo endereço, e a
+    distância resultante é o deslocamento entre as duas bases para o mesmo
+    imóvel. Quando a referência tem mais de um ponto para a mesma chave, fica
+    o mais próximo, e a dispersão entre esses candidatos é devolvida para que
+    chaves ambíguas (mesmo logradouro e número em pontos distantes, sinal de
+    homonímia de logradouro) possam ser isoladas na análise.
+
+    Parâmetros
+    ----------
+    gdf_alvo, gdf_referencia : GeoDataFrame
+        Ambos em CRS métrico e no mesmo CRS.
+    chave_alvo, chave_referencia : tuple de duas Series
+        Saída de `chave_identidade` para cada lado.
+    dispersao_ambigua_m : float
+        Distância acima da qual os candidatos de uma mesma chave são
+        considerados ambíguos.
+    mapa_logradouros : dict, opcional
+        Correspondência entre grafias de logradouro, obtida de
+        `conciliar_logradouros`. Sem ela, o casamento de nomes é exato e trata
+        variações de grafia como ausência no cadastro.
+
+    Retorna
+    -------
+    DataFrame indexado como `gdf_alvo`, com as colunas:
+        dist_identidade  distância ao ponto da referência com o mesmo endereço
+        ref_x, ref_y     coordenadas do ponto da referência, no CRS de entrada,
+                         para desenhar o vetor de deslocamento
+        chave_dispersao  dispersão dos candidatos da chave na referência
+        chave_ambigua    True quando a dispersão passa do limite
+        pareado_identidade  True quando existe contraparte por identidade
+    """
+    log_a, num_a = chave_alvo
+    log_r, num_r = chave_referencia
+
+    ref = pd.DataFrame({
+        'log': log_r.values,
+        'num': num_r.values,
+        'rx': gdf_referencia.geometry.x.values,
+        'ry': gdf_referencia.geometry.y.values,
+    }).dropna(subset=['log', 'num'])
+
+    extensao = ref.groupby(['log', 'num'])[['rx', 'ry']].agg(['min', 'max'])
+    dispersao = np.hypot(extensao[('rx', 'max')] - extensao[('rx', 'min')],
+                         extensao[('ry', 'max')] - extensao[('ry', 'min')])
+    dispersao.name = 'chave_dispersao'
+
+    log_a_conciliado = (log_a.map(lambda n: mapa_logradouros.get(n, n))
+                        if mapa_logradouros else log_a)
+
+    alvo = pd.DataFrame({
+        'log': log_a_conciliado.values,
+        'num': num_a.values,
+        'ax': gdf_alvo.geometry.x.values,
+        'ay': gdf_alvo.geometry.y.values,
+    }, index=gdf_alvo.index).dropna(subset=['log', 'num'])
+
+    par = alvo.reset_index(names='_idx').merge(ref, on=['log', 'num'], how='inner')
+    par['d'] = np.hypot(par['ax'] - par['rx'], par['ay'] - par['ry'])
+    melhor = par.loc[par.groupby('_idx')['d'].idxmin()].set_index('_idx')
+
+    out = pd.DataFrame(index=gdf_alvo.index)
+    out['dist_identidade'] = melhor['d'].reindex(gdf_alvo.index)
+    out['ref_x'] = melhor['rx'].reindex(gdf_alvo.index)
+    out['ref_y'] = melhor['ry'].reindex(gdf_alvo.index)
+    disp_por_par = pd.Series(
+        melhor.set_index(['log', 'num']).index.map(dispersao).to_numpy(),
+        index=melhor.index, dtype=float,
+    )
+    out['chave_dispersao'] = disp_por_par.reindex(gdf_alvo.index)
+    out['chave_ambigua'] = out['chave_dispersao'] > dispersao_ambigua_m
+    out['pareado_identidade'] = out['dist_identidade'].notna()
+    return out
